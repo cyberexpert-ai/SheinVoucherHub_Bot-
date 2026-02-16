@@ -1,17 +1,25 @@
 const { startCommand } = require('../commands/start');
 const { adminCommand } = require('../commands/admin');
 const { buyVoucher, recoverVoucher, myOrders, disclaimer, support } = require('../commands/user');
+const { handleScreenshotUpload } = require('./paymentHandler');
 const { getSetting } = require('../sheets/googleSheets');
+
+let userState = {};
 
 async function messageHandler(bot, msg) {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     const text = msg.text;
     
-    // Check if bot is active
+    // Check bot status
     const botStatus = await getSetting('bot_status');
     if (botStatus === 'inactive' && userId.toString() !== process.env.ADMIN_ID) {
-        return bot.sendMessage(chatId, '⚠️ Bot is currently under maintenance. Please try again later.');
+        return bot.sendMessage(chatId, '⚠️ Bot is under maintenance. Please try again later.');
+    }
+    
+    // Handle screenshot upload
+    if (msg.photo || (text && userState[userId]?.awaitingUtr)) {
+        return handleScreenshotUpload(bot, msg);
     }
     
     // Handle commands
@@ -41,11 +49,18 @@ async function messageHandler(bot, msg) {
             return support(bot, msg);
             
         case '↩️ Back':
-        case '↩️ Leave':
+        case '↩️ Back to Menu':
+        case '❌ Cancel':
+        case '❌ Cancel Payment':
             return startCommand(bot, msg);
             
+        case '📸 Send Screenshot':
+            userState[userId] = { awaitingScreenshot: true };
+            return bot.sendMessage(chatId, '📸 Please send the payment screenshot:', {
+                reply_markup: { force_reply: true }
+            });
+            
         default:
-            // Handle any other messages
             return bot.sendMessage(chatId, '❌ Invalid command. Please use the buttons below.', {
                 reply_markup: {
                     keyboard: [
