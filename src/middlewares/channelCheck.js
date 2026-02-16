@@ -20,14 +20,15 @@ const channelCheckMiddleware = {
     },
     
     async sendJoinMessage(bot, chatId) {
-        const message = `⚠️ Please join our channels first to use the bot:
+        const message = `⚠️ **Please join our channels first to use the bot:**
 
 📢 Channel 1: ${process.env.CHANNEL_1}
 📢 Channel 2: ${process.env.CHANNEL_2}
 
-After joining, click /start again.`;
+After joining, click the verify button below.`;
 
         await bot.sendMessage(chatId, message, {
+            parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: [
                     [
@@ -35,11 +36,30 @@ After joining, click /start again.`;
                         { text: '📢 Join Channel 2', url: 'https://t.me/OrdersNotify' }
                     ],
                     [
-                        { text: '✅ I have joined', callback_data: 'check_channels' }
+                        { text: '✅ Verify Join', callback_data: 'verify_channels' }
                     ]
                 ]
             }
         });
+    },
+    
+    async verifyAndRespond(bot, chatId, userId) {
+        const isMember = await this.checkChannels(bot, userId);
+        
+        if (isMember) {
+            await bot.sendMessage(chatId, 
+                `✅ **Channel Verification Successful!**\n\nNow please complete the captcha verification.`,
+                { parse_mode: 'Markdown' }
+            );
+            
+            const { authMiddleware } = require('./auth');
+            await authMiddleware.sendCaptcha(bot, chatId, userId);
+        } else {
+            await bot.sendMessage(chatId, 
+                '❌ **Verification Failed!**\n\nPlease join both channels first.',
+                { parse_mode: 'Markdown' }
+            );
+        }
     }
 };
 
