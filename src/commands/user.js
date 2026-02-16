@@ -2,8 +2,7 @@ const {
     getCategories, 
     getUserOrders, 
     getOrder,
-    getAvailableVouchers,
-    addSupportMessage
+    getAvailableVouchers
 } = require('../sheets/googleSheets');
 const { initiatePayment } = require('../handlers/paymentHandler');
 
