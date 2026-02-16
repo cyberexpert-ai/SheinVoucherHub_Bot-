@@ -1,6 +1,5 @@
 const { addUser, getUser, updateUserVerification } = require('../sheets/googleSheets');
 const { channelCheckMiddleware } = require('../middlewares/channelCheck');
-const { authMiddleware } = require('../middlewares/auth');
 
 async function startCommand(bot, msg) {
     const chatId = msg.chat.id;
@@ -18,14 +17,7 @@ async function startCommand(bot, msg) {
         return channelCheckMiddleware.sendJoinMessage(bot, chatId);
     }
     
-    // Check if user is verified
-    const user = await getUser(userId);
-    
-    if (!user || user.verified !== 'true') {
-        return authMiddleware.sendCaptcha(bot, chatId, userId);
-    }
-    
-    // Send main menu for verified users
+    // Send main menu directly (no captcha)
     await sendMainMenu(bot, chatId);
 }
 
@@ -49,11 +41,6 @@ async function sendMainMenu(bot, chatId) {
 }
 
 async function handleVerificationSuccess(bot, chatId) {
-    await bot.sendMessage(chatId, 
-        `✅ **Verification Successful!**\n\nYou can now use the bot.`,
-        { parse_mode: 'Markdown' }
-    );
-    
     await sendMainMenu(bot, chatId);
 }
 
