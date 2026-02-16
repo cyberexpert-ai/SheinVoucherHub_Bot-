@@ -48,12 +48,12 @@ After joining, click the verify button below.`;
         
         if (isMember) {
             await bot.sendMessage(chatId, 
-                `✅ **Channel Verification Successful!**\n\nNow please complete the captcha verification.`,
+                `✅ **Channel Verification Successful!**\n\nWelcome to Shein Voucher Hub!`,
                 { parse_mode: 'Markdown' }
             );
             
-            const { authMiddleware } = require('./auth');
-            await authMiddleware.sendCaptcha(bot, chatId, userId);
+            const { sendMainMenu } = require('../commands/start');
+            await sendMainMenu(bot, chatId);
         } else {
             await bot.sendMessage(chatId, 
                 '❌ **Verification Failed!**\n\nPlease join both channels first.',
