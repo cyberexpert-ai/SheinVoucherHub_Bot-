@@ -251,6 +251,12 @@ const getPaymentPageHTML = (orderId, amount, userId) => {
             display: block;
         }
         
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            display: block;
+        }
+        
         .loading {
             text-align: center;
             padding: 20px;
@@ -416,19 +422,22 @@ const getPaymentPageHTML = (orderId, amount, userId) => {
         
         async function initiateRazorpay() {
             showLoading(true);
+            showStatus('info', 'Initializing payment...');
             
             try {
-                // Create order
                 const response = await fetch('/api/create-order', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ amount, orderId })
+                    body: JSON.stringify({ 
+                        amount: amount, 
+                        orderId: orderId 
+                    })
                 });
                 
                 const data = await response.json();
                 
                 if (!data.success) {
-                    throw new Error(data.error);
+                    throw new Error(data.error || 'Failed to create order');
                 }
                 
                 const options = {
@@ -445,8 +454,8 @@ const getPaymentPageHTML = (orderId, amount, userId) => {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
-                                orderId,
-                                userId,
+                                orderId: orderId,
+                                userId: userId,
                                 razorpayOrderId: response.razorpay_order_id,
                                 razorpayPaymentId: response.razorpay_payment_id,
                                 razorpaySignature: response.razorpay_signature
@@ -456,11 +465,17 @@ const getPaymentPageHTML = (orderId, amount, userId) => {
                         const verifyData = await verifyResponse.json();
                         
                         if (verifyData.success) {
-                            showStatus('success', '✅ Payment successful! Vouchers delivered.\n\n' + 
-                                      verifyData.vouchers.map((v,i) => `${i+1}. ${v}`).join('\n'));
+                            let voucherText = '';
+                            if (verifyData.vouchers && verifyData.vouchers.length > 0) {
+                                voucherText = '\\n\\nYour Vouchers:\\n';
+                                for (let i = 0; i < verifyData.vouchers.length; i++) {
+                                    voucherText += (i + 1) + '. ' + verifyData.vouchers[i] + '\\n';
+                                }
+                            }
+                            showStatus('success', '✅ Payment successful! Vouchers delivered.' + voucherText);
                             setTimeout(() => window.close(), 5000);
                         } else {
-                            showStatus('error', '❌ ' + verifyData.error);
+                            showStatus('error', '❌ ' + (verifyData.error || 'Payment verification failed'));
                         }
                     },
                     modal: {
@@ -483,17 +498,23 @@ const getPaymentPageHTML = (orderId, amount, userId) => {
         
         async function submitManualPayment() {
             if (!selectedFile) {
-                showStatus('error', 'Please upload payment screenshot');
+                showStatus('error', '❌ Please upload payment screenshot');
                 return;
             }
             
             const utr = document.getElementById('utr').value.trim();
             if (!utr) {
-                showStatus('error', 'Please enter UTR number');
+                showStatus('error', '❌ Please enter UTR number');
+                return;
+            }
+            
+            if (!/^[A-Za-z0-9]{6,30}$/.test(utr)) {
+                showStatus('error', '❌ Invalid UTR format');
                 return;
             }
             
             showLoading(true);
+            showStatus('info', 'Submitting payment proof...');
             
             const formData = new FormData();
             formData.append('orderId', orderId);
@@ -513,7 +534,7 @@ const getPaymentPageHTML = (orderId, amount, userId) => {
                     showStatus('success', '✅ ' + data.message);
                     setTimeout(() => window.close(), 3000);
                 } else {
-                    showStatus('error', '❌ ' + data.error);
+                    showStatus('error', '❌ ' + (data.error || 'Submission failed'));
                 }
             } catch (error) {
                 showStatus('error', '❌ ' + error.message);
