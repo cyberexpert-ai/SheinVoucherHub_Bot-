@@ -2,19 +2,30 @@ const {
     getCategories, 
     getUserOrders, 
     getOrder,
-    getAvailableVouchers
+    getAvailableVouchers,
+    addSupportMessage
 } = require('../sheets/googleSheets');
 const { initiatePayment } = require('../handlers/paymentHandler');
 
 let userState = {};
 
-async function buyVoucher(bot, msg) {
+async function buyVouchers(bot, msg) {
     const chatId = msg.chat.id;
     const categories = await getCategories();
     
-    const keyboard = categories.map(cat => [
-        { text: `💰 ${cat.name} - ₹${cat.price_per_code} (${cat.stock} left)`, callback_data: `select_cat_${cat.category_id}` }
-    ]);
+    if (categories.length === 0) {
+        return bot.sendMessage(chatId, '❌ No categories available.');
+    }
+    
+    const keyboard = categories.map(cat => {
+        const match = cat.name.match(/₹(\d+)/);
+        const displayName = match ? match[1] : cat.name;
+        
+        return [
+            { text: `💰 ${displayName} - ₹${cat.price_per_code} (${cat.stock} left)`, 
+              callback_data: `select_cat_${cat.category_id}` }
+        ];
+    });
     
     keyboard.push([{ text: '🔙 Back', callback_data: 'back_to_main' }]);
     
@@ -31,9 +42,13 @@ async function selectCategory(bot, chatId, userId, categoryId) {
         return bot.sendMessage(chatId, '❌ This category is out of stock!');
     }
     
+    const match = category.name.match(/₹(\d+)/);
+    const displayName = match ? match[1] : category.name;
+    
     userState[userId] = { 
         categoryId: category.category_id,
         categoryName: category.name,
+        displayName: displayName,
         price: category.price_per_code,
         maxStock: category.stock
     };
@@ -41,21 +56,21 @@ async function selectCategory(bot, chatId, userId, categoryId) {
     const keyboard = {
         inline_keyboard: [
             [
-                { text: '1', callback_data: 'qty_1' },
-                { text: '2', callback_data: 'qty_2' },
-                { text: '3', callback_data: 'qty_3' }
+                { text: '1️⃣', callback_data: 'qty_1' },
+                { text: '2️⃣', callback_data: 'qty_2' },
+                { text: '3️⃣', callback_data: 'qty_3' }
             ],
             [
-                { text: '4', callback_data: 'qty_4' },
-                { text: '5', callback_data: 'qty_5' },
-                { text: 'Custom', callback_data: 'qty_custom' }
+                { text: '4️⃣', callback_data: 'qty_4' },
+                { text: '5️⃣', callback_data: 'qty_5' },
+                { text: '🔢 Custom', callback_data: 'qty_custom' }
             ],
             [{ text: '🔙 Back', callback_data: 'back_to_categories' }]
         ]
     };
     
     await bot.sendMessage(chatId, 
-        `📦 **Selected:** ${category.name}
+        `📦 **Selected:** ₹${displayName} Voucher
 💰 **Price per code:** ₹${category.price_per_code}
 📊 **Available:** ${category.stock}
 
@@ -84,7 +99,6 @@ async function selectQuantity(bot, chatId, userId, quantity) {
     
     const totalPrice = qty * parseInt(state.price);
     
-    // Initiate payment
     await initiatePayment(
         bot,
         chatId,
@@ -92,29 +106,8 @@ async function selectQuantity(bot, chatId, userId, quantity) {
         state.categoryId,
         qty,
         totalPrice,
-        state.categoryName
+        state.displayName
     );
-}
-
-async function recoverVoucher(bot, msg) {
-    const chatId = msg.chat.id;
-    
-    const message = `🔁 **Recover Vouchers**
-
-Send your Order ID
-Example: \`SVH-1234567890-ABC123\`
-
-⚠️ Recovery available within 2 hours of purchase`;
-
-    await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            keyboard: [['↩️ Back']],
-            resize_keyboard: true
-        }
-    });
-    
-    userState[msg.from.id] = { action: 'recovery' };
 }
 
 async function myOrders(bot, msg) {
@@ -126,7 +119,7 @@ async function myOrders(bot, msg) {
     if (orders.length === 0) {
         return bot.sendMessage(chatId, '📦 You don\'t have any orders yet.', {
             reply_markup: {
-                keyboard: [['↩️ Back']],
+                keyboard: [['🔙 Back']],
                 resize_keyboard: true
             }
         });
@@ -174,17 +167,58 @@ async function viewOrder(bot, chatId, orderId) {
              order.status === 'pending_approval' ? '⏳ Pending Approval' :
              order.status === 'rejected' ? '❌ Rejected' : '🔄 Processing'}`;
     
-    if (order.status === 'delivered') {
-        const vouchers = await getAvailableVouchers(order.category);
-        // Show delivered vouchers
-    }
-    
     await bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
                 [{ text: '🔙 Back to Orders', callback_data: 'back_to_orders' }]
             ]
+        }
+    });
+}
+
+async function recoverVouchers(bot, msg) {
+    const chatId = msg.chat.id;
+    
+    const message = `🔁 **Recover Vouchers**
+
+Send your Order ID
+Example: \`SVH-1234567890-ABC123\`
+
+⚠️ Recovery available within 2 hours of purchase`;
+
+    await bot.sendMessage(chatId, message, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            keyboard: [['🔙 Back']],
+            resize_keyboard: true
+        }
+    });
+    
+    userState[msg.from.id] = { action: 'recovery' };
+}
+
+async function support(bot, msg) {
+    const chatId = msg.chat.id;
+    
+    const message = `🆘 **Support**
+
+For any issues, please contact our support robot:
+
+👉 **@SheinSupportRobot**
+
+They will assist you within 24 hours.
+
+Thank you for using Shein Voucher Hub!`;
+
+    await bot.sendMessage(chatId, message, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: '📢 Contact Support', url: 'https://t.me/SheinSupportRobot' }]
+            ],
+            keyboard: [['🔙 Back']],
+            resize_keyboard: true
         }
     });
 }
@@ -204,41 +238,19 @@ async function disclaimer(bot, msg) {
     await bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
         reply_markup: {
-            keyboard: [['↩️ Back']],
+            keyboard: [['🔙 Back']],
             resize_keyboard: true
         }
     });
-}
-
-async function support(bot, msg) {
-    const chatId = msg.chat.id;
-    
-    const message = `🆘 **Support**
-
-Send your message to admin.
-Admin will reply as soon as possible.
-
-⚠️ Please avoid spam, fake issues, or illegal content.
-Violation may result in permanent ban.`;
-
-    await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            keyboard: [['↩️ Leave']],
-            resize_keyboard: true
-        }
-    });
-    
-    userState[msg.from.id] = { action: 'support' };
 }
 
 module.exports = {
-    buyVoucher,
+    buyVouchers,
     selectCategory,
     selectQuantity,
-    recoverVoucher,
     myOrders,
     viewOrder,
-    disclaimer,
-    support
+    recoverVouchers,
+    support,
+    disclaimer
 };
