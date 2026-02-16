@@ -9,7 +9,8 @@ const {
     rejectPayment 
 } = require('./paymentHandler');
 const { channelCheckMiddleware } = require('../middlewares/channelCheck');
-const { authMiddleware } = require('../middlewares/auth');
+
+let adminState = {};
 
 async function callbackHandler(bot, callbackQuery) {
     const chatId = callbackQuery.message.chat.id;
@@ -29,17 +30,15 @@ async function callbackHandler(bot, callbackQuery) {
     }
     
     // Admin callbacks
-    if (data.startsWith('admin_')) {
-        if (data === 'admin_add_category') {
-            const { adminCommand } = require('../commands/admin');
-            adminState[chatId] = { action: 'add_category' };
-            await bot.sendMessage(chatId, '➕ Send category amount (e.g., 500 for ₹500 voucher):');
-            return;
-        }
-        if (data === 'admin_back') {
-            const { adminCommand } = require('../commands/admin');
-            return adminCommand(bot, { chat: { id: chatId } });
-        }
+    if (data === 'admin_add_category') {
+        adminState[chatId] = { action: 'add_category' };
+        await bot.sendMessage(chatId, '➕ Send category amount (e.g., 500 for ₹500 voucher):');
+        return;
+    }
+    
+    if (data === 'admin_back') {
+        const { adminCommand } = require('../commands/admin');
+        return adminCommand(bot, { chat: { id: chatId } });
     }
     
     // Payment callbacks
