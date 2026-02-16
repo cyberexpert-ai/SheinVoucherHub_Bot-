@@ -4,7 +4,6 @@ const {
     buyVouchers, myOrders, recoverVouchers, support, disclaimer 
 } = require('../commands/user');
 const { handleScreenshotUpload } = require('./paymentHandler');
-const { authMiddleware } = require('../middlewares/auth');
 const { getSetting } = require('../sheets/googleSheets');
 
 let userState = {};
@@ -19,7 +18,6 @@ async function messageHandler(bot, msg) {
         if (text === '/admin') {
             return adminCommand(bot, msg);
         }
-        // Handle admin text commands
         const handled = await handleAdminText(bot, msg);
         if (handled) return;
     }
@@ -28,15 +26,6 @@ async function messageHandler(bot, msg) {
     const botStatus = await getSetting('bot_status');
     if (botStatus === 'inactive') {
         return bot.sendMessage(chatId, '⚠️ Bot is under maintenance.');
-    }
-    
-    // Handle captcha responses
-    if (userState[userId]?.awaitingCaptcha) {
-        const isValid = await authMiddleware.verifyUserCaptcha(bot, chatId, userId, text);
-        if (isValid) {
-            delete userState[userId];
-        }
-        return;
     }
     
     // Handle screenshot upload
@@ -60,7 +49,6 @@ async function messageHandler(bot, msg) {
     
     // Handle recovery input
     if (userState[userId]?.action === 'recovery') {
-        // Process recovery
         delete userState[userId];
         return bot.sendMessage(chatId, '🔁 Recovery request sent to admin.');
     }
@@ -89,7 +77,6 @@ async function messageHandler(bot, msg) {
             return startCommand(bot, msg);
             
         default:
-            // If no command matched, show error
             return bot.sendMessage(chatId, '❌ Invalid command. Please use the buttons below.', {
                 reply_markup: {
                     keyboard: [
