@@ -5,18 +5,13 @@ const {
     updateOrderStatus,
     getAvailableVouchers,
     assignVoucherToOrder,
-    getUser,
-    addNotification,
-    getCategories
+    getUser
 } = require('../sheets/googleSheets');
 
-// Store payment states
 let paymentState = {};
 
-// Initialize payment
 async function initiatePayment(bot, chatId, userId, categoryId, quantity, totalPrice, categoryName) {
     try {
-        // Create order in database
         const orderId = await createOrder(
             userId,
             categoryId,
@@ -25,7 +20,6 @@ async function initiatePayment(bot, chatId, userId, categoryId, quantity, totalP
             'pending'
         );
         
-        // Store in state
         paymentState[userId] = {
             orderId,
             categoryId,
@@ -36,10 +30,8 @@ async function initiatePayment(bot, chatId, userId, categoryId, quantity, totalP
             status: 'pending'
         };
         
-        // Create web app URL
         const webAppUrl = `${process.env.WEBAPP_URL}/pay?orderId=${orderId}&amount=${totalPrice}&userId=${userId}`;
         
-        // Send payment options
         await bot.sendMessage(chatId, 
             `💳 **Payment Options**
 ━━━━━━━━━━━━━━━━━━━━━
@@ -70,7 +62,6 @@ Choose payment method:`,
     }
 }
 
-// Handle manual payment selection
 async function handleManualPayment(bot, chatId, userId, orderId) {
     const order = await getOrder(orderId);
     
@@ -121,18 +112,14 @@ async function handleManualPayment(bot, chatId, userId, orderId) {
     });
 }
 
-// Handle manual payment submission
 async function submitManualPayment(orderId, userId, utr, screenshotData) {
     try {
-        // Update order with payment details
         await updateOrderPayment(orderId, utr, screenshotData);
         await updateOrderStatus(orderId, 'pending_approval');
         
-        // Get order details
         const order = await getOrder(orderId);
         const user = await getUser(userId);
         
-        // Notify admin
         const adminMessage = 
             `🆕 **Manual Payment Received**
 ━━━━━━━━━━━━━━━━━━━━━
@@ -157,14 +144,13 @@ async function submitManualPayment(orderId, userId, utr, screenshotData) {
             }
         });
         
-        // Send screenshot to admin
         await bot.sendPhoto(process.env.ADMIN_ID, Buffer.from(screenshotData.split(',')[1], 'base64'), {
             caption: `📸 Payment Screenshot for Order ${orderId}`
         });
         
         return {
             success: true,
-            message: 'Payment proof submitted successfully! Admin will verify soon.'
+            message: '✅ Payment proof submitted successfully! Admin will verify soon.'
         };
     } catch (error) {
         console.error('Submit manual payment error:', error);
@@ -175,21 +161,17 @@ async function submitManualPayment(orderId, userId, utr, screenshotData) {
     }
 }
 
-// Auto deliver vouchers for Razorpay payments
 async function autoDeliverVouchers(orderId, paymentMethod, paymentId) {
     try {
-        // Get order details
         const order = await getOrder(orderId);
         
         if (!order) {
             return { success: false, error: 'Order not found' };
         }
         
-        // Get available vouchers
         const vouchers = await getAvailableVouchers(order.category);
         
         if (vouchers.length < parseInt(order.quantity)) {
-            // Insufficient stock - notify admin
             await bot.sendMessage(process.env.ADMIN_ID, 
                 `⚠️ **Auto-delivery Failed - Insufficient Stock**
 ━━━━━━━━━━━━━━━━━━━━━
@@ -203,7 +185,6 @@ Please add more vouchers!`,
                 { parse_mode: 'Markdown' }
             );
             
-            // Update order status
             await updateOrderStatus(orderId, 'payment_received');
             
             return { 
@@ -212,7 +193,6 @@ Please add more vouchers!`,
             };
         }
         
-        // Assign vouchers
         const assignedVouchers = [];
         for (let i = 0; i < parseInt(order.quantity); i++) {
             const voucher = vouchers[i];
@@ -220,13 +200,9 @@ Please add more vouchers!`,
             assignedVouchers.push(voucher.code);
         }
         
-        // Update order status
         await updateOrderStatus(orderId, 'delivered', new Date().toISOString());
-        
-        // Update payment details
         await updateOrderPayment(orderId, paymentId, 'razorpay_auto');
         
-        // Send vouchers to user
         const voucherMessage = 
             `✅ **Payment Successful! Vouchers Delivered Instantly!**
 ━━━━━━━━━━━━━━━━━━━━━
@@ -245,7 +221,6 @@ Thank you for shopping with us! 🎉`;
             parse_mode: 'Markdown'
         });
         
-        // Send notification to channel
         const user = await getUser(order.user_id);
         await bot.sendMessage(process.env.CHANNEL_2,
             `🎯 **New Order (Auto Delivered)**
@@ -276,7 +251,6 @@ Thank you for shopping with us! 🎉`;
     }
 }
 
-// Approve manual payment
 async function approvePayment(bot, chatId, orderId) {
     try {
         const order = await getOrder(orderId);
@@ -285,7 +259,6 @@ async function approvePayment(bot, chatId, orderId) {
             return bot.sendMessage(chatId, '❌ Order not found!');
         }
         
-        // Get available vouchers
         const vouchers = await getAvailableVouchers(order.category);
         
         if (vouchers.length < parseInt(order.quantity)) {
@@ -299,7 +272,6 @@ Please add more vouchers first.`,
             );
         }
         
-        // Assign vouchers
         const assignedVouchers = [];
         for (let i = 0; i < parseInt(order.quantity); i++) {
             const voucher = vouchers[i];
@@ -307,10 +279,8 @@ Please add more vouchers first.`,
             assignedVouchers.push(voucher.code);
         }
         
-        // Update order status
         await updateOrderStatus(orderId, 'delivered', new Date().toISOString());
         
-        // Send vouchers to user
         const voucherMessage = 
             `✅ **Payment Approved! Vouchers Delivered**
 ━━━━━━━━━━━━━━━━━━━━━
@@ -328,7 +298,6 @@ Thank you for shopping with us! 🎉`;
             parse_mode: 'Markdown'
         });
         
-        // Send notification to channel
         const user = await getUser(order.user_id);
         await bot.sendMessage(process.env.CHANNEL_2,
             `🎯 **New Order (Manual Approved)**
@@ -360,7 +329,6 @@ Vouchers sent to user: ${assignedVouchers.length} codes`,
     }
 }
 
-// Reject manual payment
 async function rejectPayment(bot, chatId, orderId, reason = 'Invalid payment proof') {
     try {
         const order = await getOrder(orderId);
@@ -369,10 +337,8 @@ async function rejectPayment(bot, chatId, orderId, reason = 'Invalid payment pro
             return bot.sendMessage(chatId, '❌ Order not found!');
         }
         
-        // Update order status
         await updateOrderStatus(orderId, 'rejected');
         
-        // Notify user
         const rejectMessage = 
             `❌ **Payment Rejected**
 ━━━━━━━━━━━━━━━━━━━━━
@@ -404,26 +370,21 @@ Reason: ${reason}`,
     }
 }
 
-// Handle screenshot upload from user
 async function handleScreenshotUpload(bot, msg) {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     
     if (msg.photo) {
-        // Get the largest photo
         const photo = msg.photo[msg.photo.length - 1];
         const fileId = photo.file_id;
         
-        // Get file URL
         const file = await bot.getFile(fileId);
         const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
         
-        // Download file
         const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
         const screenshotBase64 = Buffer.from(response.data).toString('base64');
         const screenshotData = `data:image/jpeg;base64,${screenshotBase64}`;
         
-        // Store in state
         paymentState[userId] = paymentState[userId] || {};
         paymentState[userId].screenshot = screenshotData;
         
@@ -436,12 +397,10 @@ async function handleScreenshotUpload(bot, msg) {
         const utr = msg.text;
         const state = paymentState[userId];
         
-        // Validate UTR
         if (!/^[A-Za-z0-9]{6,30}$/.test(utr)) {
             return bot.sendMessage(chatId, '❌ Invalid UTR format. Please enter a valid UTR:');
         }
         
-        // Submit payment
         const result = await submitManualPayment(
             state.orderId,
             userId,
@@ -460,7 +419,6 @@ async function handleScreenshotUpload(bot, msg) {
             await bot.sendMessage(chatId, '❌ ' + result.error);
         }
         
-        // Clear state
         delete paymentState[userId];
     }
 }
