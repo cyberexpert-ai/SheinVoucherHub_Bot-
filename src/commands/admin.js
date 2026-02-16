@@ -35,9 +35,7 @@ Select an option:`;
 async function handleAdminText(bot, msg) {
     const chatId = msg.chat.id;
     const text = msg.text;
-    const userId = msg.from.id;
     
-    // Handle text inputs
     switch(text) {
         case '📊 System Stats':
             await showStats(bot, chatId);
@@ -87,7 +85,6 @@ async function handleAdminText(bot, msg) {
             return startCommand(bot, msg);
             
         default:
-            // Handle admin input states
             if (adminState[chatId]) {
                 await handleAdminInput(bot, msg);
             }
@@ -104,26 +101,20 @@ async function handleAdminInput(bot, msg) {
     
     switch(state.action) {
         case 'add_category':
-            // Simply use the number as category
             if (!/^\d+$/.test(text)) {
                 await bot.sendMessage(chatId, '❌ Please send only numbers!\nExample: 500 for ₹500 voucher');
                 return;
             }
             
             const categoryName = text.trim();
-            const price = categoryName;
-            const stock = '100';
-            
-            await addCategory(categoryName, price, stock);
+            await addCategory(categoryName, categoryName, '100');
             await bot.sendMessage(chatId, 
                 `✅ **Category Added!**
 ━━━━━━━━━━━━━━━━━━━━━
 
 📌 **Category:** ₹${categoryName} Voucher
-💰 **Price:** ₹${price}
-📦 **Stock:** ${stock}
-
-Use "➕ Add Vouchers" to add voucher codes.`,
+💰 **Price:** ₹${categoryName}
+📦 **Stock:** 100`,
                 { parse_mode: 'Markdown' }
             );
             delete adminState[chatId];
@@ -135,7 +126,7 @@ Use "➕ Add Vouchers" to add voucher codes.`,
             for (const code of codes) {
                 await addVoucher(code, state.categoryId, '100');
             }
-            await bot.sendMessage(chatId, `✅ ${codes.length} vouchers added to category!`);
+            await bot.sendMessage(chatId, `✅ ${codes.length} vouchers added!`);
             delete adminState[chatId];
             await adminCommand(bot, msg);
             break;
@@ -155,7 +146,6 @@ Use "➕ Add Vouchers" to add voucher codes.`,
             break;
             
         case 'broadcast':
-            // In a real implementation, this would send to all users
             await bot.sendMessage(chatId, '📢 Broadcast sent to all users!');
             delete adminState[chatId];
             await adminCommand(bot, msg);
@@ -213,29 +203,23 @@ async function addVouchersMenu(bot, chatId) {
     
     message += `\nSend category ID to add vouchers:`;
     
-    adminState[chatId] = { action: 'select_voucher_category' };
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, message);
     
-    // Wait for category ID
-    const response = await new Promise(resolve => {
-        bot.once('message', (msg) => {
-            if (msg.chat.id === chatId) resolve(msg.text);
-        });
+    bot.once('message', async (msg) => {
+        if (msg.chat.id !== chatId) return;
+        const categoryId = msg.text;
+        const category = categories.find(c => c.category_id === categoryId);
+        
+        if (!category) {
+            return bot.sendMessage(chatId, '❌ Invalid category ID!');
+        }
+        
+        adminState[chatId] = { action: 'add_voucher', categoryId };
+        await bot.sendMessage(chatId, '📝 Send voucher codes (one per line):');
     });
-    
-    const categoryId = response;
-    const category = categories.find(c => c.category_id === categoryId);
-    
-    if (!category) {
-        return bot.sendMessage(chatId, '❌ Invalid category ID!');
-    }
-    
-    adminState[chatId] = { action: 'add_voucher', categoryId };
-    await bot.sendMessage(chatId, '📝 Send voucher codes (one per line):');
 }
 
 async function showStats(bot, chatId) {
-    const stats = await getStats();
     const users = await getAllUsers();
     const orders = await getAllOrders();
     const blocked = await getBlockedUsers();
