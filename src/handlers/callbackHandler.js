@@ -1,13 +1,15 @@
-const { startCommand } = require('../commands/start');
-const { handleAdminCallback } = require('../commands/admin');
+const { startCommand, sendMainMenu } = require('../commands/start');
+const { handleAdminText } = require('../commands/admin');
 const { 
-    selectCategory, selectQuantity, viewOrder 
+    selectCategory, selectQuantity, viewOrder, myOrders 
 } = require('../commands/user');
 const { 
     handleManualPayment,
     approvePayment,
     rejectPayment 
 } = require('./paymentHandler');
+const { channelCheckMiddleware } = require('../middlewares/channelCheck');
+const { authMiddleware } = require('../middlewares/auth');
 
 async function callbackHandler(bot, callbackQuery) {
     const chatId = callbackQuery.message.chat.id;
@@ -16,12 +18,28 @@ async function callbackHandler(bot, callbackQuery) {
     const messageId = callbackQuery.message.message_id;
     
     await bot.answerCallbackQuery(callbackQuery.id);
-    await bot.deleteMessage(chatId, messageId).catch(() => {});
+    
+    try {
+        await bot.deleteMessage(chatId, messageId);
+    } catch (error) {}
+    
+    // Channel verification
+    if (data === 'verify_channels') {
+        return channelCheckMiddleware.verifyAndRespond(bot, chatId, userId);
+    }
     
     // Admin callbacks
-    if (data.startsWith('admin_') || data.startsWith('approve_') || 
-        data.startsWith('reject_') || data.startsWith('block_')) {
-        return handleAdminCallback(bot, callbackQuery);
+    if (data.startsWith('admin_')) {
+        if (data === 'admin_add_category') {
+            const { adminCommand } = require('../commands/admin');
+            adminState[chatId] = { action: 'add_category' };
+            await bot.sendMessage(chatId, '➕ Send category amount (e.g., 500 for ₹500 voucher):');
+            return;
+        }
+        if (data === 'admin_back') {
+            const { adminCommand } = require('../commands/admin');
+            return adminCommand(bot, { chat: { id: chatId } });
+        }
     }
     
     // Payment callbacks
@@ -30,15 +48,18 @@ async function callbackHandler(bot, callbackQuery) {
         return handleManualPayment(bot, chatId, userId, orderId);
     }
     
-    // Admin approve/reject payments
     if (data.startsWith('approve_')) {
-        const orderId = data.replace('approve_', '');
-        return approvePayment(bot, chatId, orderId);
+        if (userId.toString() === process.env.ADMIN_ID) {
+            const orderId = data.replace('approve_', '');
+            return approvePayment(bot, chatId, orderId);
+        }
     }
     
     if (data.startsWith('reject_')) {
-        const orderId = data.replace('reject_', '');
-        return rejectPayment(bot, chatId, orderId, 'Payment verification failed');
+        if (userId.toString() === process.env.ADMIN_ID) {
+            const orderId = data.replace('reject_', '');
+            return rejectPayment(bot, chatId, orderId, 'Payment verification failed');
+        }
     }
     
     // Category selection
@@ -59,14 +80,25 @@ async function callbackHandler(bot, callbackQuery) {
         return viewOrder(bot, chatId, orderId);
     }
     
-    // Cancel payment
-    if (data === 'cancel_payment') {
-        return startCommand(bot, { chat: { id: chatId }, from: { id: userId } });
+    // Back to categories
+    if (data === 'back_to_categories') {
+        const { buyVouchers } = require('../commands/user');
+        return buyVouchers(bot, { chat: { id: chatId }, from: { id: userId } });
+    }
+    
+    // Back to orders
+    if (data === 'back_to_orders') {
+        return myOrders(bot, { chat: { id: chatId }, from: { id: userId } });
     }
     
     // Back to main
     if (data === 'back_to_main') {
-        return startCommand(bot, { chat: { id: chatId }, from: { id: userId } });
+        return sendMainMenu(bot, chatId);
+    }
+    
+    // Cancel payment
+    if (data === 'cancel_payment') {
+        return sendMainMenu(bot, chatId);
     }
 }
 
