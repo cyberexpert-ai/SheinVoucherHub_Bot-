@@ -18,32 +18,26 @@ const token = process.env.BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 const app = express();
 
-// Middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 const upload = multer({ storage: multer.memoryStorage() });
 
-// Razorpay initialization
 const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID,
     key_secret: process.env.RAZORPAY_KEY_SECRET
 });
 
-// Store bot instance globally
 global.bot = bot;
 
-// Initialize Google Sheets
 setupGoogleSheets();
 
 // ==================== API Routes ====================
 
-// Serve payment page
 app.get('/pay', (req, res) => {
     const { orderId, amount, userId } = req.query;
     res.send(getPaymentPageHTML(orderId, amount, userId));
 });
 
-// Create Razorpay order
 app.post('/api/create-order', async (req, res) => {
     try {
         const { amount, orderId } = req.body;
@@ -68,12 +62,10 @@ app.post('/api/create-order', async (req, res) => {
     }
 });
 
-// Verify Razorpay payment
 app.post('/api/verify-payment', async (req, res) => {
     try {
         const { orderId, razorpayOrderId, razorpayPaymentId, razorpaySignature, userId } = req.body;
         
-        // Generate signature
         const body = razorpayOrderId + "|" + razorpayPaymentId;
         const expectedSignature = crypto
             .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -106,7 +98,6 @@ app.post('/api/verify-payment', async (req, res) => {
     }
 });
 
-// Submit manual payment
 app.post('/api/submit-manual-payment', upload.single('screenshot'), async (req, res) => {
     try {
         const { orderId, utr, userId } = req.body;
@@ -115,7 +106,6 @@ app.post('/api/submit-manual-payment', upload.single('screenshot'), async (req, 
             return res.json({ success: false, error: 'Screenshot required' });
         }
         
-        // Convert image to base64
         const screenshotBase64 = req.file.buffer.toString('base64');
         const screenshotData = `data:${req.file.mimetype};base64,${screenshotBase64}`;
         
@@ -128,7 +118,6 @@ app.post('/api/submit-manual-payment', upload.single('screenshot'), async (req, 
     }
 });
 
-// Check payment status
 app.get('/api/payment-status', async (req, res) => {
     try {
         const { orderId } = req.query;
@@ -146,23 +135,19 @@ app.get('/api/payment-status', async (req, res) => {
 
 // ==================== Bot Message Handlers ====================
 
-// Handle all messages
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
 
-    // Admin bypass
     if (userId.toString() === process.env.ADMIN_ID) {
         return messageHandler(bot, msg);
     }
 
-    // Check if blocked
     const isBlocked = await authMiddleware.checkBlocked(userId);
     if (isBlocked) {
         return bot.sendMessage(chatId, '⛔ You are blocked. Contact @SheinVoucherHub');
     }
 
-    // Check channel membership
     const isMember = await channelCheckMiddleware.checkChannels(bot, userId);
     if (!isMember && msg.text !== '/start') {
         return channelCheckMiddleware.sendJoinMessage(bot, chatId);
@@ -171,7 +156,6 @@ bot.on('message', async (msg) => {
     messageHandler(bot, msg);
 });
 
-// Handle callback queries
 bot.on('callback_query', async (callbackQuery) => {
     const userId = callbackQuery.from.id;
     
@@ -182,7 +166,6 @@ bot.on('callback_query', async (callbackQuery) => {
     callbackHandler(bot, callbackQuery);
 });
 
-// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
