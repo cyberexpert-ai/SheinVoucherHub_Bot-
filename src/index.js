@@ -37,13 +37,11 @@ setupGoogleSheets();
 
 // ==================== API Routes ====================
 
-// Serve payment page
 app.get('/pay', (req, res) => {
     const { orderId, amount, userId } = req.query;
     res.send(getPaymentPageHTML(orderId, amount, userId));
 });
 
-// Create Razorpay order
 app.post('/api/create-order', async (req, res) => {
     try {
         const { amount, orderId } = req.body;
@@ -68,12 +66,10 @@ app.post('/api/create-order', async (req, res) => {
     }
 });
 
-// Verify Razorpay payment
 app.post('/api/verify-payment', async (req, res) => {
     try {
         const { orderId, razorpayOrderId, razorpayPaymentId, razorpaySignature, userId } = req.body;
         
-        // Generate signature
         const body = razorpayOrderId + "|" + razorpayPaymentId;
         const expectedSignature = crypto
             .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -106,7 +102,6 @@ app.post('/api/verify-payment', async (req, res) => {
     }
 });
 
-// Submit manual payment
 app.post('/api/submit-manual-payment', upload.single('screenshot'), async (req, res) => {
     try {
         const { orderId, utr, userId } = req.body;
@@ -115,7 +110,6 @@ app.post('/api/submit-manual-payment', upload.single('screenshot'), async (req, 
             return res.json({ success: false, error: 'Screenshot required' });
         }
         
-        // Convert image to base64
         const screenshotBase64 = req.file.buffer.toString('base64');
         const screenshotData = `data:${req.file.mimetype};base64,${screenshotBase64}`;
         
@@ -128,7 +122,6 @@ app.post('/api/submit-manual-payment', upload.single('screenshot'), async (req, 
     }
 });
 
-// Check payment status
 app.get('/api/payment-status', async (req, res) => {
     try {
         const { orderId } = req.query;
@@ -146,10 +139,10 @@ app.get('/api/payment-status', async (req, res) => {
 
 // ==================== Bot Message Handlers ====================
 
-// Handle all messages
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
+    const text = msg.text;
 
     // Admin bypass
     if (userId.toString() === process.env.ADMIN_ID) {
@@ -162,10 +155,12 @@ bot.on('message', async (msg) => {
         return bot.sendMessage(chatId, '⛔ You are blocked. Contact @SheinVoucherHub');
     }
 
-    // Check channel membership
-    const isMember = await channelCheckMiddleware.checkChannels(bot, userId);
-    if (!isMember && msg.text !== '/start') {
-        return channelCheckMiddleware.sendJoinMessage(bot, chatId);
+    // Check channel membership for non-start commands
+    if (text !== '/start') {
+        const isMember = await channelCheckMiddleware.checkChannels(bot, userId);
+        if (!isMember) {
+            return channelCheckMiddleware.sendJoinMessage(bot, chatId);
+        }
     }
 
     messageHandler(bot, msg);
