@@ -1,12 +1,16 @@
 const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const dotenv = require('dotenv');
-const { setupDatabase } = require('./config/database');
+const bodyParser = require('body-parser');
+const multer = require('multer');
+const crypto = require('crypto');
+const Razorpay = require('razorpay');
 const { setupGoogleSheets } = require('./sheets/googleSheets');
 const { messageHandler } = require('./handlers/messageHandler');
 const { callbackHandler } = require('./handlers/callbackHandler');
 const { authMiddleware } = require('./middlewares/auth');
 const { channelCheckMiddleware } = require('./middlewares/channelCheck');
+const { getPaymentPageHTML } = require('./utils/paymentPage');
 
 dotenv.config();
 
@@ -14,45 +18,154 @@ const token = process.env.BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 const app = express();
 
+// Middleware
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+const upload = multer({ storage: multer.memoryStorage() });
+
+// Razorpay initialization
+const razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET
+});
+
 // Store bot instance globally
 global.bot = bot;
 
-// Initialize database and sheets
-setupDatabase();
+// Initialize Google Sheets
 setupGoogleSheets();
 
-// Middleware for all messages
+// ==================== API Routes ====================
+
+// Serve payment page
+app.get('/pay', (req, res) => {
+    const { orderId, amount, userId } = req.query;
+    res.send(getPaymentPageHTML(orderId, amount, userId));
+});
+
+// Create Razorpay order
+app.post('/api/create-order', async (req, res) => {
+    try {
+        const { amount, orderId } = req.body;
+        
+        const options = {
+            amount: amount * 100,
+            currency: 'INR',
+            receipt: orderId,
+            payment_capture: 1
+        };
+        
+        const order = await razorpay.orders.create(options);
+        
+        res.json({
+            success: true,
+            id: order.id,
+            amount: order.amount,
+            currency: order.currency
+        });
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
+});
+
+// Verify Razorpay payment
+app.post('/api/verify-payment', async (req, res) => {
+    try {
+        const { orderId, razorpayOrderId, razorpayPaymentId, razorpaySignature, userId } = req.body;
+        
+        // Generate signature
+        const body = razorpayOrderId + "|" + razorpayPaymentId;
+        const expectedSignature = crypto
+            .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+            .update(body.toString())
+            .digest("hex");
+        
+        const isAuthentic = expectedSignature === razorpaySignature;
+        
+        if (isAuthentic) {
+            const { autoDeliverVouchers } = require('./handlers/paymentHandler');
+            const result = await autoDeliverVouchers(orderId, 'razorpay', razorpayPaymentId);
+            
+            if (result.success) {
+                res.json({ 
+                    success: true, 
+                    message: 'Payment verified! Vouchers delivered.',
+                    vouchers: result.vouchers 
+                });
+            } else {
+                res.json({ 
+                    success: false, 
+                    error: result.error 
+                });
+            }
+        } else {
+            res.json({ success: false, error: 'Invalid signature' });
+        }
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
+});
+
+// Submit manual payment
+app.post('/api/submit-manual-payment', upload.single('screenshot'), async (req, res) => {
+    try {
+        const { orderId, utr, userId } = req.body;
+        
+        if (!req.file) {
+            return res.json({ success: false, error: 'Screenshot required' });
+        }
+        
+        // Convert image to base64
+        const screenshotBase64 = req.file.buffer.toString('base64');
+        const screenshotData = `data:${req.file.mimetype};base64,${screenshotBase64}`;
+        
+        const { submitManualPayment } = require('./handlers/paymentHandler');
+        const result = await submitManualPayment(orderId, userId, utr, screenshotData);
+        
+        res.json(result);
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
+});
+
+// Check payment status
+app.get('/api/payment-status', async (req, res) => {
+    try {
+        const { orderId } = req.query;
+        const { getOrder } = require('./sheets/googleSheets');
+        const order = await getOrder(orderId);
+        
+        res.json({
+            success: true,
+            status: order ? order.status : 'not_found'
+        });
+    } catch (error) {
+        res.json({ success: false, error: error.message });
+    }
+});
+
+// ==================== Bot Message Handlers ====================
+
+// Handle all messages
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
-    const text = msg.text;
 
-    // Admin bypass for all checks
+    // Admin bypass
     if (userId.toString() === process.env.ADMIN_ID) {
         return messageHandler(bot, msg);
     }
 
-    // Check if user is blocked
+    // Check if blocked
     const isBlocked = await authMiddleware.checkBlocked(userId);
     if (isBlocked) {
-        return bot.sendMessage(chatId, '⛔ You are blocked from using this bot.\nContact @SheinVoucherHub for support.', {
-            reply_markup: {
-                keyboard: [['🆘 Support']],
-                resize_keyboard: true
-            }
-        });
+        return bot.sendMessage(chatId, '⛔ You are blocked. Contact @SheinVoucherHub');
     }
 
     // Check channel membership
     const isMember = await channelCheckMiddleware.checkChannels(bot, userId);
-    if (!isMember && text !== '/start') {
+    if (!isMember && msg.text !== '/start') {
         return channelCheckMiddleware.sendJoinMessage(bot, chatId);
-    }
-
-    // Check captcha verification
-    const isVerified = await authMiddleware.checkVerified(userId);
-    if (!isVerified && text !== '/start') {
-        return authMiddleware.sendCaptcha(bot, chatId, userId);
     }
 
     messageHandler(bot, msg);
@@ -66,31 +179,12 @@ bot.on('callback_query', async (callbackQuery) => {
         return callbackHandler(bot, callbackQuery);
     }
 
-    const isBlocked = await authMiddleware.checkBlocked(userId);
-    if (isBlocked) {
-        return bot.answerCallbackQuery(callbackQuery.id, { text: 'You are blocked!' });
-    }
-
-    const isMember = await channelCheckMiddleware.checkChannels(bot, userId);
-    if (!isMember) {
-        return bot.answerCallbackQuery(callbackQuery.id, { text: 'Join channels first!' });
-    }
-
-    const isVerified = await authMiddleware.checkVerified(userId);
-    if (!isVerified) {
-        return authMiddleware.sendCaptcha(bot, userId, userId);
-    }
-
     callbackHandler(bot, callbackQuery);
 });
 
-// Start express server for Render
-app.get('/', (req, res) => {
-    res.send('Shein Voucher Hub Bot is running!');
-});
-
+// Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);
 });
 
