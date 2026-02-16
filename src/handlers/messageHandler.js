@@ -1,7 +1,10 @@
 const { startCommand } = require('../commands/start');
-const { adminCommand } = require('../commands/admin');
-const { buyVoucher, recoverVoucher, myOrders, disclaimer, support } = require('../commands/user');
+const { adminCommand, handleAdminText } = require('../commands/admin');
+const { 
+    buyVouchers, myOrders, recoverVouchers, support, disclaimer 
+} = require('../commands/user');
 const { handleScreenshotUpload } = require('./paymentHandler');
+const { authMiddleware } = require('../middlewares/auth');
 const { getSetting } = require('../sheets/googleSheets');
 
 let userState = {};
@@ -11,59 +14,88 @@ async function messageHandler(bot, msg) {
     const userId = msg.from.id;
     const text = msg.text;
     
-    const botStatus = await getSetting('bot_status');
-    if (botStatus === 'inactive' && userId.toString() !== process.env.ADMIN_ID) {
-        return bot.sendMessage(chatId, '⚠️ Bot is under maintenance. Please try again later.');
+    // Admin handler
+    if (userId.toString() === process.env.ADMIN_ID) {
+        if (text === '/admin') {
+            return adminCommand(bot, msg);
+        }
+        // Handle admin text commands
+        const handled = await handleAdminText(bot, msg);
+        if (handled) return;
     }
     
-    if (msg.photo || (text && userState[userId]?.awaitingUtr)) {
+    // Check bot status
+    const botStatus = await getSetting('bot_status');
+    if (botStatus === 'inactive') {
+        return bot.sendMessage(chatId, '⚠️ Bot is under maintenance.');
+    }
+    
+    // Handle captcha responses
+    if (userState[userId]?.awaitingCaptcha) {
+        const isValid = await authMiddleware.verifyUserCaptcha(bot, chatId, userId, text);
+        if (isValid) {
+            delete userState[userId];
+        }
+        return;
+    }
+    
+    // Handle screenshot upload
+    if (msg.photo || userState[userId]?.awaitingUtr) {
         return handleScreenshotUpload(bot, msg);
     }
     
+    // Handle quantity input
+    if (userState[userId]?.awaitingQty) {
+        const qty = parseInt(text);
+        const state = userState[userId];
+        
+        if (isNaN(qty) || qty < 1 || qty > parseInt(state.maxStock)) {
+            return bot.sendMessage(chatId, `❌ Please enter a valid quantity (1-${state.maxStock}):`);
+        }
+        
+        delete userState[userId].awaitingQty;
+        const { selectQuantity } = require('../commands/user');
+        return selectQuantity(bot, chatId, userId, qty.toString());
+    }
+    
+    // Handle recovery input
+    if (userState[userId]?.action === 'recovery') {
+        // Process recovery
+        delete userState[userId];
+        return bot.sendMessage(chatId, '🔁 Recovery request sent to admin.');
+    }
+    
+    // Handle main menu commands
     switch(text) {
         case '/start':
             return startCommand(bot, msg);
             
-        case '/admin':
-            if (userId.toString() === process.env.ADMIN_ID) {
-                return adminCommand(bot, msg);
-            }
-            break;
-            
-        case '🛒 Buy Voucher':
-            return buyVoucher(bot, msg);
-            
-        case '🔁 Recover Vouchers':
-            return recoverVoucher(bot, msg);
+        case '🛒 Buy Vouchers':
+            return buyVouchers(bot, msg);
             
         case '📦 My Orders':
             return myOrders(bot, msg);
             
-        case '📜 Disclaimer':
-            return disclaimer(bot, msg);
+        case '🔁 Recover Vouchers':
+            return recoverVouchers(bot, msg);
             
         case '🆘 Support':
             return support(bot, msg);
             
-        case '↩️ Back':
-        case '↩️ Back to Menu':
-        case '❌ Cancel':
-        case '❌ Cancel Payment':
+        case '📜 Disclaimer':
+            return disclaimer(bot, msg);
+            
+        case '🔙 Back':
             return startCommand(bot, msg);
             
-        case '📸 Send Screenshot':
-            userState[userId] = { awaitingScreenshot: true };
-            return bot.sendMessage(chatId, '📸 Please send the payment screenshot:', {
-                reply_markup: { force_reply: true }
-            });
-            
         default:
+            // If no command matched, show error
             return bot.sendMessage(chatId, '❌ Invalid command. Please use the buttons below.', {
                 reply_markup: {
                     keyboard: [
-                        ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
-                        ['📦 My Orders', '📜 Disclaimer'],
-                        ['🆘 Support']
+                        ['🛒 Buy Vouchers', '📦 My Orders'],
+                        ['🔁 Recover Vouchers', '🆘 Support'],
+                        ['📜 Disclaimer']
                     ],
                     resize_keyboard: true
                 }
