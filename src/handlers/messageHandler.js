@@ -11,18 +11,15 @@ async function messageHandler(bot, msg) {
     const userId = msg.from.id;
     const text = msg.text;
     
-    // Check bot status
     const botStatus = await getSetting('bot_status');
     if (botStatus === 'inactive' && userId.toString() !== process.env.ADMIN_ID) {
         return bot.sendMessage(chatId, '⚠️ Bot is under maintenance. Please try again later.');
     }
     
-    // Handle screenshot upload
     if (msg.photo || (text && userState[userId]?.awaitingUtr)) {
         return handleScreenshotUpload(bot, msg);
     }
     
-    // Handle commands
     switch(text) {
         case '/start':
             return startCommand(bot, msg);
