@@ -1,16 +1,15 @@
 const { startCommand, sendMainMenu } = require('../commands/start');
-const { handleAdminText } = require('../commands/admin');
+const { adminCommand, handleAdminCallback } = require('../commands/admin');
 const { 
-    selectCategory, selectQuantity, viewOrder, myOrders 
+    selectCategory, selectQuantity, viewOrder, myOrders,
+    showQRCode
 } = require('../commands/user');
 const { 
-    handleManualPayment,
     approvePayment,
     rejectPayment 
 } = require('./paymentHandler');
 const { channelCheckMiddleware } = require('../middlewares/channelCheck');
-
-let adminState = {};
+const { userState } = require('../commands/user');
 
 async function callbackHandler(bot, callbackQuery) {
     const chatId = callbackQuery.message.chat.id;
@@ -24,29 +23,17 @@ async function callbackHandler(bot, callbackQuery) {
         await bot.deleteMessage(chatId, messageId);
     } catch (error) {}
     
-    // Channel verification
+    // ==================== CHANNEL VERIFICATION ====================
     if (data === 'verify_channels') {
         return channelCheckMiddleware.verifyAndRespond(bot, chatId, userId);
     }
     
-    // Admin callbacks
-    if (data === 'admin_add_category') {
-        adminState[chatId] = { action: 'add_category' };
-        await bot.sendMessage(chatId, '➕ Send category amount (e.g., 500 for ₹500 voucher):');
-        return;
+    // ==================== ADMIN CALLBACKS ====================
+    if (data.startsWith('admin_')) {
+        return handleAdminCallback(bot, callbackQuery);
     }
     
-    if (data === 'admin_back') {
-        const { adminCommand } = require('../commands/admin');
-        return adminCommand(bot, { chat: { id: chatId } });
-    }
-    
-    // Payment callbacks
-    if (data.startsWith('manual_pay_')) {
-        const orderId = data.replace('manual_pay_', '');
-        return handleManualPayment(bot, chatId, userId, orderId);
-    }
-    
+    // ==================== PAYMENT CALLBACKS ====================
     if (data.startsWith('approve_')) {
         if (userId.toString() === process.env.ADMIN_ID) {
             const orderId = data.replace('approve_', '');
@@ -61,42 +48,51 @@ async function callbackHandler(bot, callbackQuery) {
         }
     }
     
-    // Category selection
+    if (data.startsWith('show_qr_')) {
+        const orderId = data.replace('show_qr_', '');
+        const amount = userState[userId]?.totalPrice || 0;
+        return showQRCode(bot, chatId, orderId, amount);
+    }
+    
+    if (data.startsWith('upload_ss_')) {
+        userState[userId] = userState[userId] || {};
+        userState[userId].awaitingScreenshot = true;
+        return bot.sendMessage(chatId, '📸 Please send the payment screenshot:', {
+            reply_markup: { force_reply: true }
+        });
+    }
+    
+    // ==================== CATEGORY SELECTION ====================
     if (data.startsWith('select_cat_')) {
         const categoryId = data.split('_')[2];
         return selectCategory(bot, chatId, userId, categoryId);
     }
     
-    // Quantity selection
+    // ==================== QUANTITY SELECTION ====================
     if (data.startsWith('qty_')) {
         const quantity = data.split('_')[1];
         return selectQuantity(bot, chatId, userId, quantity);
     }
     
-    // View order
+    // ==================== VIEW ORDER ====================
     if (data.startsWith('view_order_')) {
         const orderId = data.replace('view_order_', '');
         return viewOrder(bot, chatId, orderId);
     }
     
-    // Back to categories
+    // ==================== BACK TO CATEGORIES ====================
     if (data === 'back_to_categories') {
         const { buyVouchers } = require('../commands/user');
         return buyVouchers(bot, { chat: { id: chatId }, from: { id: userId } });
     }
     
-    // Back to orders
+    // ==================== BACK TO ORDERS ====================
     if (data === 'back_to_orders') {
         return myOrders(bot, { chat: { id: chatId }, from: { id: userId } });
     }
     
-    // Back to main
-    if (data === 'back_to_main') {
-        return sendMainMenu(bot, chatId);
-    }
-    
-    // Cancel payment
-    if (data === 'cancel_payment') {
+    // ==================== BACK TO MAIN ====================
+    if (data === 'back_to_main' || data === 'cancel_payment' || data === 'cancel_order') {
         return sendMainMenu(bot, chatId);
     }
 }
