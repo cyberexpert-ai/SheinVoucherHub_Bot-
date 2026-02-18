@@ -1,275 +1,266 @@
 const { 
-    createOrder, 
-    updateOrderPayment, 
     getOrder,
     updateOrderStatus,
     getAvailableVouchers,
     assignVoucherToOrder,
-    getUser
+    getUser,
+    updateUserStats
 } = require('../sheets/googleSheets');
+const QRCode = require('qrcode');
 const axios = require('axios');
 
 let paymentState = {};
 
-async function initiatePayment(bot, chatId, userId, categoryId, quantity, totalPrice, categoryName) {
-    try {
-        // Create order in database
-        const orderId = await createOrder(
-            userId,
-            categoryId,
-            quantity,
-            totalPrice,
-            'pending'
-        );
-        
-        // Store in state
-        paymentState[userId] = {
-            orderId,
-            categoryId,
-            quantity,
-            totalPrice,
-            categoryName,
-            chatId,
-            status: 'pending'
-        };
-        
-        // Create web app URL
-        const webAppUrl = `${process.env.WEBAPP_URL}/pay?orderId=${orderId}&amount=${totalPrice}&userId=${userId}`;
-        
-        // Send payment options
-        await bot.sendMessage(chatId, 
-            `💳 **Payment Options**
-━━━━━━━━━━━━━━━━━━━━━
-
-📦 **Order ID:** \`${orderId}\`
-📂 **Category:** ${categoryName}
-🔢 **Quantity:** ${quantity}
-💰 **Total Amount:** ₹${totalPrice}
-
-Choose payment method:`,
-            {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '🤖 Auto Payment (Instant)', web_app: { url: webAppUrl } }],
-                        [{ text: '💳 Manual Payment', callback_data: `manual_pay_${orderId}` }],
-                        [{ text: '❌ Cancel', callback_data: 'cancel_payment' }]
-                    ]
-                }
-            }
-        );
-        
-        return orderId;
-    } catch (error) {
-        console.error('Initiate payment error:', error);
-        await bot.sendMessage(chatId, '❌ Payment initiation failed. Please try again.');
-        return null;
-    }
-}
-
-async function handleManualPayment(bot, chatId, userId, orderId) {
-    const order = await getOrder(orderId);
-    
-    if (!order) {
-        return bot.sendMessage(chatId, '❌ Order not found!');
-    }
-    
+// ==================== INITIATE MANUAL PAYMENT ====================
+async function initiateManualPayment(bot, chatId, userId, orderId, amount, category, quantity) {
     paymentState[userId] = {
-        ...paymentState[userId],
         orderId,
-        method: 'manual',
-        categoryId: order.category,
-        quantity: order.quantity,
-        totalPrice: order.total_price
+        amount,
+        category,
+        quantity,
+        status: 'pending'
     };
     
-    const bankDetails = `🏦 **Manual Payment Instructions**
-━━━━━━━━━━━━━━━━━━━━━
+    const paymentMessage = `💳 **Manual Payment**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**Bank Details:**
-• **Bank:** HDFC Bank
-• **Account Name:** Shein Voucher Hub
-• **Account Number:** 50100234567890
-• **IFSC Code:** HDFC0001234
-• **UPI ID:** sheinvoucher@hdfcbank
+📋 **Order Summary**
+• Order ID: \`${orderId}\`
+• Category: ${category}
+• Quantity: ${quantity}
+• Amount: ₹${amount}
 
-**Order Details:**
-• **Order ID:** \`${orderId}\`
-• **Amount:** ₹${order.total_price}
+📱 **Payment Steps:**
+1️⃣ Scan QR code below
+2️⃣ Pay exact amount: ₹${amount}
+3️⃣ Take screenshot
+4️⃣ Upload screenshot
+5️⃣ Enter UTR number
 
-**Steps to pay:**
-1️⃣ Send payment to above account
-2️⃣ Take screenshot of payment
-3️⃣ Click "Send Screenshot" button
-4️⃣ Upload screenshot and enter UTR
+⏰ **Time Limit:** 30 minutes
 
-⚠️ **Note:** Fake payments = Permanent ban!`;
+👇 **Click button to start**`;
 
-    await bot.sendMessage(chatId, bankDetails, {
+    await bot.sendMessage(chatId, paymentMessage, {
         parse_mode: 'Markdown',
         reply_markup: {
-            keyboard: [
-                ['📸 Send Screenshot'],
-                ['❌ Cancel Payment']
-            ],
-            resize_keyboard: true
+            inline_keyboard: [
+                [{ text: '📱 Show QR Code', callback_data: `show_qr_${orderId}` }],
+                [{ text: '📸 Upload Screenshot', callback_data: `upload_ss_${orderId}` }],
+                [{ text: '❌ Cancel', callback_data: 'cancel_payment' }]
+            ]
         }
     });
 }
 
-async function submitManualPayment(orderId, userId, utr, screenshotData) {
+// ==================== SHOW QR CODE ====================
+async function showQRCode(bot, chatId, orderId, amount) {
+    const qrData = `upi://pay?pa=sheinvoucher@hdfcbank&pn=SheinVoucher&am=${amount}&cu=INR`;
+    
     try {
-        // Update order with payment details
-        await updateOrderPayment(orderId, utr, screenshotData);
+        const qrBuffer = await QRCode.toBuffer(qrData);
+        
+        const caption = `📱 **Scan QR Code**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💰 **Amount:** ₹${amount}
+🆔 **Order ID:** \`${orderId}\`
+
+📌 **Instructions:**
+1. Open any UPI app (GPay/PhonePe/Paytm)
+2. Scan this QR code
+3. Pay exact amount: ₹${amount}
+4. Take screenshot
+5. Click "I have paid" button
+
+⏰ **Valid for:** 30 minutes`;
+
+        await bot.sendPhoto(chatId, qrBuffer, {
+            caption: caption,
+            parse_mode: 'Markdown',
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '✅ I have paid', callback_data: `upload_ss_${orderId}` }],
+                    [{ text: '❌ Cancel', callback_data: 'cancel_payment' }]
+                ]
+            }
+        });
+    } catch (error) {
+        console.error('QR generation error:', error);
+        await bot.sendMessage(chatId, '❌ Failed to generate QR code. Please try again.');
+    }
+}
+
+// ==================== HANDLE SCREENSHOT UPLOAD ====================
+async function handleScreenshotUpload(bot, msg) {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    
+    if (msg.photo) {
+        // User sent screenshot
+        const photo = msg.photo[msg.photo.length - 1];
+        const fileId = photo.file_id;
+        
+        // Get file URL
+        const file = await bot.getFile(fileId);
+        const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+        
+        // Download file
+        const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+        const screenshotBase64 = Buffer.from(response.data).toString('base64');
+        const screenshotData = `data:image/jpeg;base64,${screenshotBase64}`;
+        
+        // Store in state
+        paymentState[userId] = paymentState[userId] || {};
+        paymentState[userId].screenshot = screenshotData;
+        
+        await bot.sendMessage(chatId, '📝 **Enter UTR/Transaction ID**\n\nExample: `UTR123456789`', {
+            parse_mode: 'Markdown',
+            reply_markup: { force_reply: true }
+        });
+        
+    } else if (msg.text && paymentState[userId]?.screenshot) {
+        // User sent UTR
+        const utr = msg.text.trim().toUpperCase();
+        const state = paymentState[userId];
+        
+        // Validate UTR
+        if (!/^[A-Z0-9]{6,30}$/.test(utr)) {
+            return bot.sendMessage(chatId, '❌ Invalid UTR format. Please enter a valid UTR:');
+        }
+        
+        // Submit payment for verification
+        await submitManualPayment(bot, chatId, userId, state.orderId, utr, state.screenshot);
+        
+        // Clear state
+        delete paymentState[userId];
+    }
+}
+
+// ==================== SUBMIT MANUAL PAYMENT ====================
+async function submitManualPayment(bot, chatId, userId, orderId, utr, screenshot) {
+    try {
+        // Update order status
         await updateOrderStatus(orderId, 'pending_approval');
         
         // Get order details
         const order = await getOrder(orderId);
         const user = await getUser(userId);
         
+        // Prepare payment data for admin
+        const paymentData = {
+            orderId,
+            userId,
+            utr,
+            screenshot,
+            amount: order.total_price,
+            category: order.category,
+            quantity: order.quantity,
+            username: user?.username || 'N/A',
+            firstName: user?.first_name || 'N/A',
+            timestamp: Date.now()
+        };
+        
+        // Send to payment verification bot
+        await sendToPaymentBot(paymentData);
+        
         // Notify admin
         const adminMessage = 
-            `🆕 **Manual Payment Received**
-━━━━━━━━━━━━━━━━━━━━━
+            `🆕 **New Manual Payment Received**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 **Order ID:** \`${orderId}\`
-**User:** ${user?.first_name || 'N/A'} (@${user?.username || 'N/A'})
+**User:** ${paymentData.firstName} (@${paymentData.username})
 **User ID:** \`${userId}\`
-**Amount:** ₹${order?.total_price || 'N/A'}
-**UTR:** \`${utr}\`
-
-**Action Required:** Verify payment`;
-
-        await bot.sendMessage(process.env.ADMIN_ID, adminMessage, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: '✅ Approve Payment', callback_data: `approve_${orderId}` },
-                        { text: '❌ Reject Payment', callback_data: `reject_${orderId}` }
-                    ]
-                ]
-            }
-        });
-        
-        // Send screenshot to admin
-        await bot.sendPhoto(process.env.ADMIN_ID, Buffer.from(screenshotData.split(',')[1], 'base64'), {
-            caption: `📸 Payment Screenshot for Order ${orderId}`
-        });
-        
-        return {
-            success: true,
-            message: '✅ Payment proof submitted successfully! Admin will verify soon.'
-        };
-    } catch (error) {
-        console.error('Submit manual payment error:', error);
-        return {
-            success: false,
-            error: 'Failed to submit payment proof'
-        };
-    }
-}
-
-async function autoDeliverVouchers(orderId, paymentMethod, paymentId) {
-    try {
-        // Get order details
-        const order = await getOrder(orderId);
-        
-        if (!order) {
-            return { success: false, error: 'Order not found' };
-        }
-        
-        // Get available vouchers
-        const vouchers = await getAvailableVouchers(order.category);
-        
-        if (vouchers.length < parseInt(order.quantity)) {
-            // Insufficient stock - notify admin
-            await bot.sendMessage(process.env.ADMIN_ID, 
-                `⚠️ **Auto-delivery Failed - Insufficient Stock**
-━━━━━━━━━━━━━━━━━━━━━
-
-**Order ID:** \`${orderId}\`
-**Category:** ${order.category}
-**Required:** ${order.quantity}
-**Available:** ${vouchers.length}
-
-Please add more vouchers!`,
-                { parse_mode: 'Markdown' }
-            );
-            
-            // Update order status
-            await updateOrderStatus(orderId, 'payment_received');
-            
-            return { 
-                success: false, 
-                error: 'Insufficient stock. Admin will deliver manually.' 
-            };
-        }
-        
-        // Assign vouchers
-        const assignedVouchers = [];
-        for (let i = 0; i < parseInt(order.quantity); i++) {
-            const voucher = vouchers[i];
-            await assignVoucherToOrder(voucher.voucher_id, order.user_id, orderId);
-            assignedVouchers.push(voucher.code);
-        }
-        
-        // Update order status
-        await updateOrderStatus(orderId, 'delivered', new Date().toISOString());
-        
-        // Update payment details
-        await updateOrderPayment(orderId, paymentId, 'razorpay_auto');
-        
-        // Send vouchers to user
-        const voucherMessage = 
-            `✅ **Payment Successful! Vouchers Delivered Instantly!**
-━━━━━━━━━━━━━━━━━━━━━
-
-**Order ID:** \`${orderId}\`
-**Payment ID:** \`${paymentId}\`
 **Category:** ${order.category}
 **Quantity:** ${order.quantity}
+**Amount:** ₹${order.total_price}
+**UTR:** \`${utr}\`
 
-**Your Vouchers:**
-${assignedVouchers.map((v, i) => `${i+1}. \`${v}\``).join('\n')}
+**Action Required:** Verify payment in @SheinPaymentVerifyBot`;
 
-Thank you for shopping with us! 🎉`;
-
-        await bot.sendMessage(parseInt(order.user_id), voucherMessage, {
+        await bot.sendMessage(process.env.ADMIN_ID, adminMessage, {
             parse_mode: 'Markdown'
         });
         
-        // Send notification to channel
-        const user = await getUser(order.user_id);
-        await bot.sendMessage(process.env.CHANNEL_2,
-            `🎯 **New Order (Auto Delivered)**
-━━━━━━━━━━━━━━━━━━━━━
+        // Send screenshot to admin
+        await bot.sendPhoto(process.env.ADMIN_ID, Buffer.from(screenshot.split(',')[1], 'base64'), {
+            caption: `📸 Payment Screenshot for Order ${orderId}`
+        });
+        
+        // Confirm to user
+        await bot.sendMessage(chatId, 
+            `✅ **Payment Proof Submitted!**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-╰➤👤 **User:** @${user?.username || 'N/A'}
-╰➤🆔 **User ID:** \`${order.user_id}\`
-╰➤📡 **Status:** ✅ Success (Auto)
-╰➤📦 **Quantity:** ${order.quantity}
-╰➤💳 **Amount:** ₹${order.total_price}
-╰➤💳 **Payment:** Razorpay
+**Order ID:** \`${orderId}\`
+**UTR:** \`${utr}\`
 
-🤖 **Bot:** @SheinVoucherHub_Bot
-━━━━━━━━━━━━━━━━━━━━━`,
-            { parse_mode: 'Markdown' }
+📌 **Next Steps:**
+1. Admin will verify your payment
+2. You'll receive vouchers within 24 hours
+3. Check status in "My Orders"
+
+Thank you for your patience! 🙏`,
+            {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    keyboard: [['🔙 Back to Main Menu']],
+                    resize_keyboard: true
+                }
+            }
         );
         
-        return {
-            success: true,
-            vouchers: assignedVouchers
-        };
+        return { success: true };
+        
     } catch (error) {
-        console.error('Auto deliver error:', error);
-        return {
-            success: false,
-            error: error.message
-        };
+        console.error('Submit manual payment error:', error);
+        await bot.sendMessage(chatId, '❌ Failed to submit payment. Please try again.');
+        return { success: false };
     }
 }
 
+// ==================== SEND TO PAYMENT BOT ====================
+async function sendToPaymentBot(paymentData) {
+    try {
+        const botToken = process.env.PAYMENT_BOT_TOKEN;
+        const adminId = process.env.ADMIN_ID;
+        
+        // Send message to payment bot
+        const message = 
+            `🆕 **Payment Verification Required**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Order ID:** \`${paymentData.orderId}\`
+**User:** ${paymentData.firstName} (@${paymentData.username})
+**User ID:** \`${paymentData.userId}\`
+**Category:** ${paymentData.category}
+**Quantity:** ${paymentData.quantity}
+**Amount:** ₹${paymentData.amount}
+**UTR:** \`${paymentData.utr}\`
+
+✅ **Verify Payment** - /verify_${paymentData.orderId}
+❌ **Reject Payment** - /reject_${paymentData.orderId}`;
+
+        await axios.post(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            chat_id: adminId,
+            text: message,
+            parse_mode: 'Markdown'
+        });
+        
+        // Send screenshot
+        await axios.post(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
+            chat_id: adminId,
+            photo: paymentData.screenshot,
+            caption: `📸 Screenshot for Order ${paymentData.orderId}`
+        });
+        
+    } catch (error) {
+        console.error('Error sending to payment bot:', error);
+    }
+}
+
+// ==================== APPROVE PAYMENT ====================
 async function approvePayment(bot, chatId, orderId) {
     try {
         const order = await getOrder(orderId);
@@ -303,14 +294,18 @@ Please add more vouchers first.`,
         // Update order status
         await updateOrderStatus(orderId, 'delivered', new Date().toISOString());
         
+        // Update user stats
+        await updateUserStats(order.user_id, order.total_price);
+        
         // Send vouchers to user
         const voucherMessage = 
             `✅ **Payment Approved! Vouchers Delivered**
-━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 **Order ID:** \`${orderId}\`
 **Category:** ${order.category}
 **Quantity:** ${order.quantity}
+**Total:** ₹${order.total_price}
 
 **Your Vouchers:**
 ${assignedVouchers.map((v, i) => `${i+1}. \`${v}\``).join('\n')}
@@ -324,26 +319,27 @@ Thank you for shopping with us! 🎉`;
         // Send notification to channel
         const user = await getUser(order.user_id);
         await bot.sendMessage(process.env.CHANNEL_2,
-            `🎯 **New Order (Manual Approved)**
-━━━━━━━━━━━━━━━━━━━━━
+            `🎯 **New Order Delivered**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ╰➤👤 **User:** @${user?.username || 'N/A'}
 ╰➤🆔 **User ID:** \`${order.user_id}\`
-╰➤📡 **Status:** ✅ Success (Manual)
-╰➤📦 **Quantity:** ${order.quantity}
-╰➤💳 **Amount:** ₹${order.total_price}
+╰➤📡 **Status:** ✅ Delivered
+╰➤📦 **Category:** ${order.category}
+╰➤🔢 **Quantity:** ${order.quantity}
+╰➤💰 **Amount:** ₹${order.total_price}
 
 🤖 **Bot:** @SheinVoucherHub_Bot
-━━━━━━━━━━━━━━━━━━━━━`,
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
             { parse_mode: 'Markdown' }
         );
         
         await bot.sendMessage(chatId, 
             `✅ **Payment Approved!**
-━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Order ID: \`${orderId}\`
-Vouchers sent to user: ${assignedVouchers.length} codes`,
+Vouchers sent: ${assignedVouchers.length}`,
             { parse_mode: 'Markdown' }
         );
         
@@ -353,6 +349,7 @@ Vouchers sent to user: ${assignedVouchers.length} codes`,
     }
 }
 
+// ==================== REJECT PAYMENT ====================
 async function rejectPayment(bot, chatId, orderId, reason = 'Invalid payment proof') {
     try {
         const order = await getOrder(orderId);
@@ -367,14 +364,14 @@ async function rejectPayment(bot, chatId, orderId, reason = 'Invalid payment pro
         // Notify user
         const rejectMessage = 
             `❌ **Payment Rejected**
-━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 **Order ID:** \`${orderId}\`
 
 Your payment could not be verified.
 **Reason:** ${reason}
 
-Please contact support @SheinVoucherHub if you think this is a mistake.`;
+Please contact @SheinVoucherHub for assistance.`;
 
         await bot.sendMessage(parseInt(order.user_id), rejectMessage, {
             parse_mode: 'Markdown'
@@ -382,10 +379,9 @@ Please contact support @SheinVoucherHub if you think this is a mistake.`;
         
         await bot.sendMessage(chatId, 
             `✅ **Payment Rejected**
-━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Order ID: \`${orderId}\`
-User notified about rejection.
 Reason: ${reason}`,
             { parse_mode: 'Markdown' }
         );
@@ -396,73 +392,12 @@ Reason: ${reason}`,
     }
 }
 
-async function handleScreenshotUpload(bot, msg) {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    
-    if (msg.photo) {
-        // Get the largest photo
-        const photo = msg.photo[msg.photo.length - 1];
-        const fileId = photo.file_id;
-        
-        // Get file URL
-        const file = await bot.getFile(fileId);
-        const fileUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
-        
-        // Download file
-        const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-        const screenshotBase64 = Buffer.from(response.data).toString('base64');
-        const screenshotData = `data:image/jpeg;base64,${screenshotBase64}`;
-        
-        // Store in state
-        paymentState[userId] = paymentState[userId] || {};
-        paymentState[userId].screenshot = screenshotData;
-        
-        await bot.sendMessage(chatId, '📝 Now please enter your UTR/Transaction ID:', {
-            reply_markup: {
-                force_reply: true
-            }
-        });
-    } else if (msg.text && paymentState[userId]?.screenshot) {
-        const utr = msg.text;
-        const state = paymentState[userId];
-        
-        // Validate UTR
-        if (!/^[A-Za-z0-9]{6,30}$/.test(utr)) {
-            return bot.sendMessage(chatId, '❌ Invalid UTR format. Please enter a valid UTR:');
-        }
-        
-        // Submit payment
-        const result = await submitManualPayment(
-            state.orderId,
-            userId,
-            utr,
-            state.screenshot
-        );
-        
-        if (result.success) {
-            await bot.sendMessage(chatId, result.message, {
-                reply_markup: {
-                    keyboard: [['↩️ Back to Menu']],
-                    resize_keyboard: true
-                }
-            });
-        } else {
-            await bot.sendMessage(chatId, '❌ ' + result.error);
-        }
-        
-        // Clear state
-        delete paymentState[userId];
-    }
-}
-
 module.exports = {
-    initiatePayment,
-    handleManualPayment,
+    initiateManualPayment,
+    showQRCode,
+    handleScreenshotUpload,
     submitManualPayment,
-    autoDeliverVouchers,
     approvePayment,
     rejectPayment,
-    handleScreenshotUpload,
     paymentState
 };
