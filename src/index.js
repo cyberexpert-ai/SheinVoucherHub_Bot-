@@ -2,7 +2,7 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const dotenv = require('dotenv');
 const bodyParser = require('body-parser');
-const cron = require('node-cron');
+const cron = require('node-cron');  // এই লাইনটি ঠিক আছে কিনা চেক করুন
 const { setupGoogleSheets } = require('./sheets/googleSheets');
 const { messageHandler } = require('./handlers/messageHandler');
 const { callbackHandler } = require('./handlers/callbackHandler');
@@ -25,16 +25,19 @@ global.bot = bot;
 // Initialize Google Sheets
 setupGoogleSheets();
 
-// Scheduled Tasks
+// Scheduled Tasks - এখানে node-cron ব্যবহার করা হয়েছে
 cron.schedule('0 0 * * *', () => {
+    console.log('Running daily tasks...');
     adminScheduler.runDailyTasks();
 });
 
 cron.schedule('0 0 * * 0', () => {
+    console.log('Running weekly tasks...');
     adminScheduler.runWeeklyTasks();
 });
 
 cron.schedule('0 0 1 * *', () => {
+    console.log('Running monthly tasks...');
     adminScheduler.runMonthlyTasks();
 });
 
@@ -78,19 +81,6 @@ bot.on('callback_query', async (callbackQuery) => {
     }
 
     callbackHandler(bot, callbackQuery);
-});
-
-// Handle payment verification from external bot
-app.post('/api/verify-payment', async (req, res) => {
-    const { orderId, userId, utr, status } = req.body;
-    
-    if (status === 'confirmed') {
-        const { approvePayment } = require('./handlers/paymentHandler');
-        await approvePayment(bot, process.env.ADMIN_ID, orderId);
-        res.json({ success: true });
-    } else {
-        res.json({ success: false });
-    }
 });
 
 // Health check endpoint
