@@ -1,5 +1,5 @@
 const { startCommand } = require('../commands/start');
-const { adminCommand, handleAdminText } = require('../commands/admin');
+const { adminCommand, handleAdminCallback } = require('../commands/admin');
 const { 
     buyVouchers, myOrders, recoverVouchers, support, disclaimer 
 } = require('../commands/user');
@@ -13,20 +13,25 @@ async function messageHandler(bot, msg) {
     const userId = msg.from.id;
     const text = msg.text;
     
-    // Admin handler
+    // ==================== ADMIN HANDLER ====================
     if (userId.toString() === process.env.ADMIN_ID) {
         if (text === '/admin') {
             return adminCommand(bot, msg);
         }
+        
+        // Handle admin text commands
+        const { handleAdminText } = require('../commands/admin');
         const handled = await handleAdminText(bot, msg);
         if (handled) return;
     }
     
-    // Check bot status
+    // ==================== BOT STATUS CHECK ====================
     const botStatus = await getSetting('bot_status');
-    if (botStatus === 'inactive') {
-        return bot.sendMessage(chatId, '⚠️ Bot is under maintenance.');
+    if (botStatus === 'inactive' && userId.toString() !== process.env.ADMIN_ID) {
+        return bot.sendMessage(chatId, '⚠️ Bot is under maintenance. Please try again later.');
     }
+    
+    // ==================== USER STATE HANDLERS ====================
     
     // Handle screenshot upload
     if (msg.photo || userState[userId]?.awaitingUtr) {
@@ -49,11 +54,12 @@ async function messageHandler(bot, msg) {
     
     // Handle recovery input
     if (userState[userId]?.action === 'recovery') {
+        // Process recovery (implement recovery logic)
         delete userState[userId];
         return bot.sendMessage(chatId, '🔁 Recovery request sent to admin.');
     }
     
-    // Handle main menu commands
+    // ==================== MAIN MENU COMMANDS ====================
     switch(text) {
         case '/start':
             return startCommand(bot, msg);
@@ -73,20 +79,14 @@ async function messageHandler(bot, msg) {
         case '📜 Disclaimer':
             return disclaimer(bot, msg);
             
+        case '🔙 Back to Main Menu':
         case '🔙 Back':
             return startCommand(bot, msg);
             
         default:
-            return bot.sendMessage(chatId, '❌ Invalid command. Please use the buttons below.', {
-                reply_markup: {
-                    keyboard: [
-                        ['🛒 Buy Vouchers', '📦 My Orders'],
-                        ['🔁 Recover Vouchers', '🆘 Support'],
-                        ['📜 Disclaimer']
-                    ],
-                    resize_keyboard: true
-                }
-            });
+            // Silent ignore - no error message
+            console.log(`User ${userId} typed: ${text} - ignored`);
+            return;
     }
 }
 
