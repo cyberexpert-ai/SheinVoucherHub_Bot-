@@ -1,5 +1,6 @@
-const { addUser, getUser, updateUserVerification } = require('../sheets/googleSheets');
+const { addUser, getUser } = require('../sheets/googleSheets');
 const { channelCheckMiddleware } = require('../middlewares/channelCheck');
+const keyboards = require('../keyboards/keyboards');
 
 async function startCommand(bot, msg) {
     const chatId = msg.chat.id;
@@ -17,31 +18,35 @@ async function startCommand(bot, msg) {
         return channelCheckMiddleware.sendJoinMessage(bot, chatId);
     }
     
-    // Send main menu directly (no captcha)
-    await sendMainMenu(bot, chatId);
+    // Send welcome message and main menu
+    await sendWelcomeMessage(bot, chatId, firstName);
 }
 
-async function sendMainMenu(bot, chatId) {
-    const welcomeMessage = `🎯 Welcome to Shein Voucher Hub!
+async function sendWelcomeMessage(bot, chatId, firstName) {
+    const welcomeMessage = `🎯 **Welcome to Shein Voucher Hub!** ${firstName ? firstName : ''}
 
 🚀 Get exclusive Shein vouchers at the best prices!
 
-📌 Choose an option below:`;
+📌 **Features:**
+• 🛒 Buy Vouchers - Multiple categories available
+• 📦 My Orders - Track your purchases
+• 🔁 Recover Vouchers - Get lost vouchers back
+• 🆘 Support - 24/7 customer support
+• 📜 Disclaimer - Terms and conditions
+
+✨ **How to use:**
+1️⃣ Select a category
+2️⃣ Choose quantity
+3️⃣ Make payment via QR code
+4️⃣ Upload screenshot and UTR
+5️⃣ Get vouchers instantly after admin approval
+
+👇 **Choose an option below:**`;
 
     await bot.sendMessage(chatId, welcomeMessage, {
-        reply_markup: {
-            keyboard: [
-                ['🛒 Buy Vouchers', '📦 My Orders'],
-                ['🔁 Recover Vouchers', '🆘 Support'],
-                ['📜 Disclaimer']
-            ],
-            resize_keyboard: true
-        }
+        parse_mode: 'Markdown',
+        reply_markup: keyboards.mainMenu
     });
 }
 
-async function handleVerificationSuccess(bot, chatId) {
-    await sendMainMenu(bot, chatId);
-}
-
-module.exports = { startCommand, sendMainMenu, handleVerificationSuccess };
+module.exports = { startCommand, sendWelcomeMessage };
