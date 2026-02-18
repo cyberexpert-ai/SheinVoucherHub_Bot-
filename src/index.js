@@ -2,12 +2,12 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const dotenv = require('dotenv');
 const bodyParser = require('body-parser');
-const Razorpay = require('razorpay');
+const cron = require('node-cron');
 const { setupGoogleSheets } = require('./sheets/googleSheets');
 const { messageHandler } = require('./handlers/messageHandler');
 const { callbackHandler } = require('./handlers/callbackHandler');
 const { paymentHandler } = require('./handlers/paymentHandler');
-const { adminHandler } = require('./handlers/adminHandler');
+const { adminScheduler } = require('./commands/admin');
 
 dotenv.config();
 
@@ -19,36 +19,87 @@ const app = express();
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Razorpay
-const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET
-});
-
+// Store bot instance globally
 global.bot = bot;
-global.razorpay = razorpay;
 
 // Initialize Google Sheets
 setupGoogleSheets();
 
-// API Routes
-app.post('/api/verify-payment', async (req, res) => {
-    const { orderId, paymentId, signature } = req.body;
-    // Payment verification logic
-    res.json({ success: true });
+// Scheduled Tasks
+cron.schedule('0 0 * * *', () => {
+    adminScheduler.runDailyTasks();
 });
 
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: Date.now() });
+cron.schedule('0 0 * * 0', () => {
+    adminScheduler.runWeeklyTasks();
 });
 
-// Bot message handlers
+cron.schedule('0 0 1 * *', () => {
+    adminScheduler.runMonthlyTasks();
+});
+
+// ==================== Bot Message Handlers ====================
+
 bot.on('message', async (msg) => {
-    await messageHandler(bot, msg);
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const text = msg.text;
+
+    // Admin bypass
+    if (userId.toString() === process.env.ADMIN_ID) {
+        return messageHandler(bot, msg);
+    }
+
+    // Check if blocked
+    const { authMiddleware } = require('./middlewares/auth');
+    const isBlocked = await authMiddleware.checkBlocked(userId);
+    if (isBlocked) {
+        return bot.sendMessage(chatId, '⛔ You are blocked. Contact @SheinVoucherHub');
+    }
+
+    // Check channel membership for non-start commands
+    if (text !== '/start') {
+        const { channelCheckMiddleware } = require('./middlewares/channelCheck');
+        const isMember = await channelCheckMiddleware.checkChannels(bot, userId);
+        if (!isMember) {
+            return channelCheckMiddleware.sendJoinMessage(bot, chatId);
+        }
+    }
+
+    messageHandler(bot, msg);
 });
 
+// Handle callback queries
 bot.on('callback_query', async (callbackQuery) => {
-    await callbackHandler(bot, callbackQuery);
+    const userId = callbackQuery.from.id;
+    
+    if (userId.toString() === process.env.ADMIN_ID) {
+        return callbackHandler(bot, callbackQuery);
+    }
+
+    callbackHandler(bot, callbackQuery);
+});
+
+// Handle payment verification from external bot
+app.post('/api/verify-payment', async (req, res) => {
+    const { orderId, userId, utr, status } = req.body;
+    
+    if (status === 'confirmed') {
+        const { approvePayment } = require('./handlers/paymentHandler');
+        await approvePayment(bot, process.env.ADMIN_ID, orderId);
+        res.json({ success: true });
+    } else {
+        res.json({ success: false });
+    }
+});
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'ok', 
+        timestamp: Date.now(),
+        uptime: process.uptime()
+    });
 });
 
 // Start server
