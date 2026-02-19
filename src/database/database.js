@@ -3,39 +3,44 @@ const path = require('path');
 
 const DATA_FILE = path.join(__dirname, 'data.json');
 
-// ==================== ডাটা লোড ====================
-function loadData() {
-    try {
-        if (fs.existsSync(DATA_FILE)) {
-            const data = fs.readFileSync(DATA_FILE, 'utf8');
-            return JSON.parse(data);
-        }
-    } catch (error) {
-        console.error('Error loading data:', error);
+// Initialize database
+function initDatabase() {
+    if (!fs.existsSync(DATA_FILE)) {
+        const defaultData = {
+            users: [],
+            categories: [],
+            vouchers: [],
+            orders: [],
+            blockedUsers: [],
+            settings: {
+                bot_status: 'active',
+                payment_qr: 'https://i.supaimg.com/00332ad4-8aa7-408f-8705-55dbc91ea737.jpg',
+                recovery_hours: 2,
+                order_prefix: 'SVH',
+                support_bot: '@SheinSupportRobot'
+            },
+            stats: {
+                totalUsers: 0,
+                totalOrders: 0,
+                totalRevenue: 0
+            }
+        };
+        fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
     }
-    
-    // ডিফল্ট ডাটা
-    return {
-        users: [],
-        categories: [],
-        vouchers: [],
-        orders: [],
-        blockedUsers: [],
-        settings: {
-            bot_status: 'active',
-            payment_method: 'manual',
-            recovery_hours: '2',
-            order_prefix: 'SVH'
-        },
-        stats: {
-            totalUsers: 0,
-            totalOrders: 0,
-            totalRevenue: 0
-        }
-    };
 }
 
-// ==================== ডাটা সেভ ====================
+// Load data
+function loadData() {
+    try {
+        const data = fs.readFileSync(DATA_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch (error) {
+        console.error('Error loading data:', error);
+        return null;
+    }
+}
+
+// Save data
 function saveData(data) {
     try {
         fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
@@ -46,12 +51,12 @@ function saveData(data) {
     }
 }
 
-// গ্লোবাল ডাটা
-let data = loadData();
+// ==================== USER FUNCTIONS ====================
 
-// ==================== ইউজার ফাংশন ====================
 function addUser(userId, username, firstName) {
+    const data = loadData();
     const existing = data.users.find(u => u.id === userId);
+    
     if (!existing) {
         data.users.push({
             id: userId,
@@ -59,17 +64,16 @@ function addUser(userId, username, firstName) {
             firstName: firstName || 'N/A',
             joinDate: new Date().toISOString(),
             lastActive: new Date().toISOString(),
-            verified: true,
             role: 'user',
             orders: [],
             totalSpent: 0,
-            status: 'active'
+            status: 'active',
+            warnings: 0
         });
         data.stats.totalUsers = data.users.length;
         saveData(data);
         return true;
     } else {
-        // আপডেট লাস্ট অ্যাকটিভ
         existing.lastActive = new Date().toISOString();
         saveData(data);
         return true;
@@ -77,21 +81,27 @@ function addUser(userId, username, firstName) {
 }
 
 function getUser(userId) {
+    const data = loadData();
     return data.users.find(u => u.id === userId);
 }
 
 function getAllUsers() {
+    const data = loadData();
     return data.users;
 }
 
-function blockUser(userId, reason) {
+function blockUser(userId, reason, duration = null) {
+    const data = loadData();
     const user = data.users.find(u => u.id === userId);
+    
     if (user) {
         user.status = 'blocked';
         data.blockedUsers.push({
             id: userId,
             reason: reason,
-            date: new Date().toISOString()
+            date: new Date().toISOString(),
+            duration: duration,
+            expiresAt: duration ? new Date(Date.now() + duration * 3600000).toISOString() : null
         });
         saveData(data);
         return true;
@@ -100,7 +110,9 @@ function blockUser(userId, reason) {
 }
 
 function unblockUser(userId) {
+    const data = loadData();
     const user = data.users.find(u => u.id === userId);
+    
     if (user) {
         user.status = 'active';
         data.blockedUsers = data.blockedUsers.filter(b => b.id !== userId);
@@ -111,67 +123,109 @@ function unblockUser(userId) {
 }
 
 function isUserBlocked(userId) {
-    return data.blockedUsers.some(b => b.id === userId);
+    const data = loadData();
+    const blocked = data.blockedUsers.find(b => b.id === userId);
+    
+    if (!blocked) return false;
+    
+    // Check temporary block expiry
+    if (blocked.expiresAt && new Date(blocked.expiresAt) < new Date()) {
+        unblockUser(userId);
+        return false;
+    }
+    
+    return true;
 }
 
 function getBlockedUsers() {
+    const data = loadData();
     return data.blockedUsers;
 }
 
-function updateUserStats(userId, amount) {
+function addWarning(userId, reason) {
+    const data = loadData();
     const user = data.users.find(u => u.id === userId);
+    
     if (user) {
-        user.totalSpent = (parseInt(user.totalSpent) || 0) + parseInt(amount);
+        user.warnings = (user.warnings || 0) + 1;
+        if (user.warnings >= 3) {
+            blockUser(userId, '3 warnings - auto blocked');
+        }
         saveData(data);
+        return user.warnings;
     }
+    return 0;
 }
 
-// ==================== ক্যাটাগরি ফাংশন ====================
+// ==================== CATEGORY FUNCTIONS ====================
+
 function getCategories() {
+    const data = loadData();
     return data.categories;
 }
 
+function getCategory(categoryId) {
+    const data = loadData();
+    return data.categories.find(c => c.id === categoryId);
+}
+
 function addCategory(name, price, stock = 100) {
+    const data = loadData();
     const id = data.categories.length + 1;
-    const formattedName = `₹${name} Voucher`;
     
     data.categories.push({
         id: id.toString(),
-        name: formattedName,
+        name: `₹${name} Voucher`,
         price: parseInt(price),
         stock: parseInt(stock),
         sold: 0,
-        status: 'active'
+        status: 'active',
+        createdAt: new Date().toISOString()
     });
     
     saveData(data);
     return id.toString();
 }
 
-function getCategory(categoryId) {
-    return data.categories.find(c => c.id === categoryId);
-}
-
-function updateCategoryStock(categoryId, newStock) {
+function updateCategory(categoryId, updates) {
+    const data = loadData();
     const cat = data.categories.find(c => c.id === categoryId);
+    
     if (cat) {
-        cat.stock = parseInt(newStock);
+        Object.assign(cat, updates);
         saveData(data);
         return true;
     }
     return false;
 }
 
-// ==================== ভাউচার ফাংশন ====================
-function getVouchers() {
+function deleteCategory(categoryId) {
+    const data = loadData();
+    data.categories = data.categories.filter(c => c.id !== categoryId);
+    saveData(data);
+    return true;
+}
+
+function updateCategoryStock(categoryId, newStock) {
+    return updateCategory(categoryId, { stock: parseInt(newStock) });
+}
+
+function updateCategoryPrice(categoryId, newPrice) {
+    return updateCategory(categoryId, { price: parseInt(newPrice) });
+}
+
+// ==================== VOUCHER FUNCTIONS ====================
+
+function getVouchers(categoryId = null) {
+    const data = loadData();
+    if (categoryId) {
+        return data.vouchers.filter(v => v.categoryId === categoryId);
+    }
     return data.vouchers;
 }
 
-function getVouchersByCategory(categoryId) {
-    return data.vouchers.filter(v => v.categoryId === categoryId);
-}
-
 function getAvailableVouchers(categoryId) {
+    const data = loadData();
     return data.vouchers.filter(v => 
         v.categoryId === categoryId && 
         v.status === 'available'
@@ -179,36 +233,60 @@ function getAvailableVouchers(categoryId) {
 }
 
 function addVoucher(code, categoryId, price) {
-    const voucherId = `VCH-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+    const data = loadData();
+    const id = `VCH-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
     
     data.vouchers.push({
-        id: voucherId,
+        id: id,
         code: code,
         categoryId: categoryId,
         price: parseInt(price),
         status: 'available',
-        buyerId: null,
-        orderId: null,
         createdAt: new Date().toISOString()
     });
     
     saveData(data);
-    return voucherId;
+    return id;
+}
+
+function bulkAddVouchers(categoryId, codes, price) {
+    const added = [];
+    for (const code of codes) {
+        const id = addVoucher(code, categoryId, price);
+        added.push(id);
+    }
+    return added;
+}
+
+function deleteVoucher(voucherId) {
+    const data = loadData();
+    data.vouchers = data.vouchers.filter(v => v.id !== voucherId);
+    saveData(data);
+    return true;
+}
+
+function deleteVouchersByCategory(categoryId) {
+    const data = loadData();
+    data.vouchers = data.vouchers.filter(v => v.categoryId !== categoryId);
+    saveData(data);
+    return true;
 }
 
 function assignVoucher(voucherId, buyerId, orderId) {
+    const data = loadData();
     const voucher = data.vouchers.find(v => v.id === voucherId);
+    
     if (voucher) {
         voucher.status = 'sold';
         voucher.buyerId = buyerId;
         voucher.orderId = orderId;
         voucher.soldAt = new Date().toISOString();
         
-        // ক্যাটাগরি সোল্ড আপডেট
+        // Update category sold count
         const cat = data.categories.find(c => c.id === voucher.categoryId);
         if (cat) {
             cat.sold = (cat.sold || 0) + 1;
-            cat.stock = cat.stock - 1;
+            cat.stock = Math.max(0, cat.stock - 1);
         }
         
         saveData(data);
@@ -217,17 +295,21 @@ function assignVoucher(voucherId, buyerId, orderId) {
     return false;
 }
 
-function deleteVoucher(voucherId) {
-    data.vouchers = data.vouchers.filter(v => v.id !== voucherId);
-    saveData(data);
-    return true;
-}
+// ==================== ORDER FUNCTIONS ====================
 
-// ==================== অর্ডার ফাংশন ====================
-function createOrder(userId, categoryId, quantity, totalPrice, status = 'pending') {
-    const orderId = `SVH-${new Date().getFullYear()}${(new Date().getMonth()+1).toString().padStart(2,'0')}${new Date().getDate().toString().padStart(2,'0')}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+function createOrder(userId, categoryId, quantity, totalPrice) {
+    const data = loadData();
+    const date = new Date();
+    const year = date.getFullYear();
+    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+    const day = date.getDate().toString().padStart(2, '0');
+    const random = Math.random().toString(36).substr(2, 6).toUpperCase();
     
+    const orderId = `SVH-${year}${month}${day}-${random}`;
     const category = data.categories.find(c => c.id === categoryId);
+    
+    const recoveryExpiry = new Date();
+    recoveryExpiry.setHours(recoveryExpiry.getHours() + 2);
     
     data.orders.push({
         id: orderId,
@@ -236,18 +318,20 @@ function createOrder(userId, categoryId, quantity, totalPrice, status = 'pending
         categoryName: category ? category.name : '',
         quantity: parseInt(quantity),
         totalPrice: parseInt(totalPrice),
-        status: status,
+        status: 'pending',
         paymentMethod: 'manual',
         transactionId: null,
         screenshot: null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        createdAt: date.toISOString(),
+        updatedAt: date.toISOString(),
+        recoveryExpiry: recoveryExpiry.toISOString(),
+        deliveredAt: null
     });
     
     data.stats.totalOrders = data.orders.length;
     saveData(data);
     
-    // ইউজারের অর্ডার আপডেট
+    // Update user's orders
     const user = data.users.find(u => u.id === userId);
     if (user) {
         if (!user.orders) user.orders = [];
@@ -258,31 +342,43 @@ function createOrder(userId, categoryId, quantity, totalPrice, status = 'pending
 }
 
 function getOrder(orderId) {
+    const data = loadData();
     return data.orders.find(o => o.id === orderId);
 }
 
-function getAllOrders() {
-    return data.orders;
-}
-
 function getUserOrders(userId) {
+    const data = loadData();
     return data.orders.filter(o => o.userId === userId);
 }
 
-function updateOrderStatus(orderId, status, deliveryDate = null) {
+function getAllOrders() {
+    const data = loadData();
+    return data.orders;
+}
+
+function updateOrderStatus(orderId, status, adminNote = null) {
+    const data = loadData();
     const order = data.orders.find(o => o.id === orderId);
+    
     if (order) {
         order.status = status;
         order.updatedAt = new Date().toISOString();
-        if (deliveryDate) {
-            order.deliveredAt = deliveryDate;
+        
+        if (status === 'delivered') {
+            order.deliveredAt = new Date().toISOString();
+            data.stats.totalRevenue = (data.stats.totalRevenue || 0) + order.totalPrice;
             
-            // রেভিনিউ আপডেট
-            if (status === 'delivered') {
-                data.stats.totalRevenue = (data.stats.totalRevenue || 0) + order.totalPrice;
-                updateUserStats(order.userId, order.totalPrice);
+            // Update user total spent
+            const user = data.users.find(u => u.id === order.userId);
+            if (user) {
+                user.totalSpent = (user.totalSpent || 0) + order.totalPrice;
             }
         }
+        
+        if (adminNote) {
+            order.adminNote = adminNote;
+        }
+        
         saveData(data);
         return true;
     }
@@ -290,7 +386,9 @@ function updateOrderStatus(orderId, status, deliveryDate = null) {
 }
 
 function updateOrderPayment(orderId, transactionId, screenshot) {
+    const data = loadData();
     const order = data.orders.find(o => o.id === orderId);
+    
     if (order) {
         order.transactionId = transactionId;
         order.screenshot = screenshot;
@@ -302,30 +400,69 @@ function updateOrderPayment(orderId, transactionId, screenshot) {
     return false;
 }
 
-// ==================== সেটিংস ফাংশন ====================
+function canRecover(orderId, userId) {
+    const data = loadData();
+    const order = data.orders.find(o => o.id === orderId);
+    
+    if (!order) return { can: false, reason: 'not_found' };
+    if (order.userId !== userId) return { can: false, reason: 'wrong_user' };
+    if (order.status !== 'delivered') return { can: false, reason: 'not_delivered' };
+    
+    const now = new Date();
+    const expiry = new Date(order.deliveredAt || order.createdAt);
+    expiry.setHours(expiry.getHours() + 2);
+    
+    if (now > expiry) return { can: false, reason: 'expired' };
+    
+    return { can: true, order };
+}
+
+// ==================== SETTINGS FUNCTIONS ====================
+
 function getSetting(key) {
+    const data = loadData();
     return data.settings[key];
 }
 
 function updateSetting(key, value) {
+    const data = loadData();
     data.settings[key] = value;
     saveData(data);
     return true;
 }
 
-function getBotStatus() {
-    return data.settings.bot_status || 'active';
+function getPaymentQR() {
+    const data = loadData();
+    return data.settings.payment_qr;
 }
 
-// ==================== স্ট্যাটিস্টিক্স ====================
+function updatePaymentQR(url) {
+    return updateSetting('payment_qr', url);
+}
+
+function getBotStatus() {
+    const data = loadData();
+    return data.settings.bot_status;
+}
+
+function toggleBotStatus() {
+    const current = getBotStatus();
+    return updateSetting('bot_status', current === 'active' ? 'inactive' : 'active');
+}
+
+// ==================== STATS FUNCTIONS ====================
+
 function getDashboardStats() {
+    const data = loadData();
     const users = data.users.length;
     const activeUsers = data.users.filter(u => u.status === 'active').length;
     const blockedUsers = data.blockedUsers.length;
     
     const orders = data.orders.length;
     const pendingOrders = data.orders.filter(o => o.status === 'pending_approval' || o.status === 'pending').length;
+    const processingOrders = data.orders.filter(o => o.status === 'processing').length;
     const completedOrders = data.orders.filter(o => o.status === 'delivered').length;
+    const rejectedOrders = data.orders.filter(o => o.status === 'rejected').length;
     
     const today = new Date().toDateString();
     const todayOrders = data.orders.filter(o => new Date(o.createdAt).toDateString() === today).length;
@@ -334,28 +471,27 @@ function getDashboardStats() {
         .reduce((sum, o) => sum + o.totalPrice, 0);
     
     const categories = data.categories.length;
+    const totalStock = data.categories.reduce((sum, c) => sum + (c.stock || 0), 0);
+    const totalSold = data.categories.reduce((sum, c) => sum + (c.sold || 0), 0);
+    
     const vouchers = data.vouchers.length;
     const availableVouchers = data.vouchers.filter(v => v.status === 'available').length;
     
     return {
-        users,
-        activeUsers,
-        blockedUsers,
-        orders,
-        pendingOrders,
-        completedOrders,
-        todayOrders,
-        todayRevenue,
+        users, activeUsers, blockedUsers,
+        orders, pendingOrders, processingOrders, completedOrders, rejectedOrders,
+        todayOrders, todayRevenue,
         totalRevenue: data.stats.totalRevenue || 0,
-        categories,
-        vouchers,
-        availableVouchers
+        categories, totalStock, totalSold,
+        vouchers, availableVouchers
     };
 }
 
-// ==================== এক্সপোর্ট ====================
+// ==================== EXPORT ====================
+
 module.exports = {
-    // ইউজার
+    initDatabase,
+    // User
     addUser,
     getUser,
     getAllUsers,
@@ -363,34 +499,43 @@ module.exports = {
     unblockUser,
     isUserBlocked,
     getBlockedUsers,
+    addWarning,
     
-    // ক্যাটাগরি
+    // Category
     getCategories,
-    addCategory,
     getCategory,
+    addCategory,
+    updateCategory,
+    deleteCategory,
     updateCategoryStock,
+    updateCategoryPrice,
     
-    // ভাউচার
+    // Voucher
     getVouchers,
-    getVouchersByCategory,
     getAvailableVouchers,
     addVoucher,
-    assignVoucher,
+    bulkAddVouchers,
     deleteVoucher,
+    deleteVouchersByCategory,
+    assignVoucher,
     
-    // অর্ডার
+    // Order
     createOrder,
     getOrder,
-    getAllOrders,
     getUserOrders,
+    getAllOrders,
     updateOrderStatus,
     updateOrderPayment,
+    canRecover,
     
-    // সেটিংস
+    // Settings
     getSetting,
     updateSetting,
+    getPaymentQR,
+    updatePaymentQR,
     getBotStatus,
+    toggleBotStatus,
     
-    // স্ট্যাটিস্টিক্স
+    // Stats
     getDashboardStats
 };
