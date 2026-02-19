@@ -118,41 +118,28 @@ async function handleAdminInput(bot, msg) {
     if (!state) return;
     
     switch(state.action) {
-        // ===== ADD CATEGORY =====
+        // ===== ADD CATEGORY - শুধু সংখ্যা দিলেই হবে =====
         case 'add_category':
-            const parts = text.split('|');
-            if (parts.length < 3) {
-                await bot.sendMessage(chatId, '❌ Format: Name|BasePrice|Stock\nExample: 500|500|100');
+            if (!/^\d+$/.test(text)) {
+                await bot.sendMessage(chatId, '❌ Please send only numbers!\nExample: 500');
                 return;
             }
             
-            const name = parts[0].trim();
-            const basePrice = parseInt(parts[1]);
-            const stock = parseInt(parts[2]);
-            
-            // Default prices
-            const prices = {
-                1: Math.round(basePrice * 0.06),
-                5: Math.round(basePrice * 0.055),
-                10: Math.round(basePrice * 0.05),
-                20: Math.round(basePrice * 0.045)
-            };
-            
-            const id = db.addCategory(name, basePrice, prices, stock);
-            await bot.sendMessage(chatId, `✅ **Category Added!**\nID: ${id}\nName: ₹${name} Shein Voucher`);
+            const catId = db.addCategory(text);
+            await bot.sendMessage(chatId, `✅ **Category Added!**\nID: ${catId}\nName: ₹${text} Shein Voucher\nStock: 100`);
             delete adminState[chatId];
             break;
             
         // ===== UPDATE CATEGORY PRICE =====
         case 'update_price':
-            const [catId, qty, newPrice] = text.split('|');
-            if (!catId || !qty || !newPrice) {
+            const [catIdPrice, qty, newPrice] = text.split('|');
+            if (!catIdPrice || !qty || !newPrice) {
                 await bot.sendMessage(chatId, '❌ Format: CategoryID|Quantity|NewPrice\nExample: 1|5|52');
                 return;
             }
             
-            db.updateCategoryPrice(catId, qty, parseInt(newPrice));
-            await bot.sendMessage(chatId, `✅ Category ${catId} price for ${qty} codes updated to ₹${newPrice}!`);
+            db.updateCategoryPrice(catIdPrice, qty, parseInt(newPrice));
+            await bot.sendMessage(chatId, `✅ Category ${catIdPrice} price for ${qty} codes updated to ₹${newPrice}!`);
             delete adminState[chatId];
             break;
             
@@ -182,11 +169,11 @@ async function handleAdminInput(bot, msg) {
             delete adminState[chatId];
             break;
             
-        // ===== ADD VOUCHERS =====
+        // ===== ADD VOUCHERS - কোড লিখলেই হবে =====
         case 'add_voucher':
             const codes = text.split('\n').map(c => c.trim()).filter(c => c);
             for (const code of codes) {
-                db.addVoucher(code, state.categoryId, state.price);
+                db.addVoucher(code, state.categoryId);
             }
             await bot.sendMessage(chatId, `✅ ${codes.length} vouchers added to category!`);
             delete adminState[chatId];
@@ -345,35 +332,19 @@ async function showCategoryManagement(bot, chatId) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
     
     if (cats.length === 0) {
-        msg += 'No categories yet.\nUse "➕ Add Category" to add.';
+        msg += 'No categories yet.\nSend a number to add category (e.g., 500)';
     } else {
         cats.forEach(c => {
+            const availableVouchers = db.getAvailableVouchersCount(c.id);
             msg += `**ID ${c.id}:** ${c.name}\n`;
-            msg += `├ Base Price: ₹${c.basePrice}\n`;
-            msg += `├ Stock: ${c.stock} | Sold: ${c.sold}\n`;
+            msg += `├ Stock: ${c.stock} | Vouchers: ${availableVouchers}\n`;
             msg += `├ Prices: 1→₹${c.prices[1]}, 5→₹${c.prices[5]}, 10→₹${c.prices[10]}, 20+→₹${c.prices[20]}\n\n`;
         });
+        msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSend a number to add new category`;
     }
     
-    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📌 **Commands:**`;
-    
-    const keyboard = {
-        inline_keyboard: [
-            [
-                { text: '➕ Add', callback_data: 'admin_add_category' },
-                { text: '✏️ Price', callback_data: 'admin_update_price' }
-            ],
-            [
-                { text: '📦 Stock', callback_data: 'admin_update_stock' },
-                { text: '🗑️ Delete', callback_data: 'admin_delete_category' }
-            ]
-        ]
-    };
-    
-    await bot.sendMessage(chatId, msg, {
-        parse_mode: 'Markdown',
-        reply_markup: keyboard
-    });
+    await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+    adminState[chatId] = { action: 'add_category' };
 }
 
 // ==================== VOUCHER MANAGEMENT ====================
@@ -389,35 +360,22 @@ async function showVoucherManagement(bot, chatId) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
     
     msg += '**Select Category:**\n\n';
-    cats.forEach(c => {
-        const available = db.getAvailableVouchers(c.id).length;
-        msg += `**ID ${c.id}:** ${c.name}\n`;
-        msg += `├ Stock: ${c.stock} | Available Vouchers: ${available}\n\n`;
+    
+    // Create inline keyboard with categories
+    const keyboard = {
+        inline_keyboard: cats.map(cat => {
+            const available = db.getAvailableVouchersCount(cat.id);
+            return [{
+                text: `${cat.name} (Available: ${available})`,
+                callback_data: `admin_select_cat_${cat.id}`
+            }];
+        })
+    };
+    
+    await bot.sendMessage(chatId, msg, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
     });
-    
-    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSend category ID to add vouchers`;
-    
-    await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
-    
-    // Wait for category ID
-    const response = await new Promise(resolve => {
-        const handler = (m) => {
-            if (m.chat.id === chatId) {
-                bot.removeListener('message', handler);
-                resolve(m.text);
-            }
-        };
-        bot.on('message', handler);
-    });
-    
-    const cat = cats.find(c => c.id === response);
-    if (!cat) {
-        await bot.sendMessage(chatId, '❌ Invalid category ID');
-        return;
-    }
-    
-    adminState[chatId] = { action: 'add_voucher', categoryId: cat.id, price: cat.basePrice };
-    await bot.sendMessage(chatId, '📝 Send voucher codes (one per line):');
 }
 
 // ==================== ORDER MANAGEMENT ====================
@@ -486,6 +444,9 @@ async function showSettings(bot, chatId) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 🤖 **Bot Status:** ${status === 'active' ? '✅ Active' : '❌ Inactive'}
+📢 **Channel 1:** ${db.getSetting('channel_1')}
+📢 **Channel 2:** ${db.getSetting('channel_2')}
+📢 **Channel 2 ID:** ${db.getSetting('channel_2_id')}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📌 **Commands:**`;
@@ -511,27 +472,16 @@ async function handleAdminCallback(bot, callbackQuery) {
     
     await bot.answerCallbackQuery(callbackQuery.id);
     
+    if (data.startsWith('admin_select_cat_')) {
+        const categoryId = data.replace('admin_select_cat_', '');
+        const cat = db.getCategory(categoryId);
+        
+        adminState[chatId] = { action: 'add_voucher', categoryId: categoryId };
+        await bot.sendMessage(chatId, `📝 Send voucher codes for ${cat.name}\n(One per line):`);
+        return;
+    }
+    
     switch(data) {
-        case 'admin_add_category':
-            adminState[chatId] = { action: 'add_category' };
-            await bot.sendMessage(chatId, '➕ Format: Name|BasePrice|Stock\nExample: 500|500|100');
-            break;
-            
-        case 'admin_update_price':
-            adminState[chatId] = { action: 'update_price' };
-            await bot.sendMessage(chatId, '✏️ Format: CategoryID|Quantity|NewPrice\nExample: 1|5|52');
-            break;
-            
-        case 'admin_update_stock':
-            adminState[chatId] = { action: 'update_stock' };
-            await bot.sendMessage(chatId, '📦 Format: CategoryID|NewStock\nExample: 1|200');
-            break;
-            
-        case 'admin_delete_category':
-            adminState[chatId] = { action: 'delete_category' };
-            await bot.sendMessage(chatId, '🗑️ Send category ID to delete:');
-            break;
-            
         case 'admin_block_user':
             adminState[chatId] = { action: 'block_user' };
             await bot.sendMessage(chatId, '🔒 Send User ID to block:');
