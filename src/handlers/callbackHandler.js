@@ -1,21 +1,84 @@
 const { sendMainMenu } = require('../commands/start');
-const { adminCommand } = require('../commands/admin');
+const { handleAdminCallback } = require('../commands/admin');
 const { 
-    selectCategory, selectQuantity, myOrders 
+    selectCategory, selectQuantity, uploadScreenshot,
+    myOrders, viewOrder
 } = require('../commands/user');
-const { channelCheckMiddleware } = require('../middlewares/channelCheck');
+const db = require('../database/database');
+const { checkChannels } = require('../middlewares/channelCheck');
 
 async function callbackHandler(bot, callbackQuery) {
     const chatId = callbackQuery.message.chat.id;
     const userId = callbackQuery.from.id;
     const data = callbackQuery.data;
+    const messageId = callbackQuery.message.message_id;
     
     await bot.answerCallbackQuery(callbackQuery.id);
-    await bot.deleteMessage(chatId, callbackQuery.message.message_id).catch(() => {});
+    await bot.deleteMessage(chatId, messageId).catch(() => {});
     
-    if (data === 'verify_channels') {
-        return channelCheckMiddleware.verifyAndRespond(bot, chatId, userId);
+    // ==================== ADMIN CALLBACKS ====================
+    if (data.startsWith('admin_')) {
+        return handleAdminCallback(bot, callbackQuery);
     }
+    
+    // ==================== CHANNEL VERIFICATION ====================
+    if (data === 'verify_channels') {
+        const isMember = await checkChannels(bot, userId);
+        if (isMember) {
+            await bot.sendMessage(chatId, '✅ **Verification Successful!**', {
+                parse_mode: 'Markdown'
+            });
+            await sendMainMenu(bot, chatId);
+        } else {
+            await bot.sendMessage(chatId, '❌ **Please join both channels first!**', {
+                parse_mode: 'Markdown'
+            });
+        }
+        return;
+    }
+    
+    // ==================== ORDER APPROVAL ====================
+    if (data.startsWith('approve_')) {
+        if (userId.toString() === process.env.ADMIN_ID) {
+            const orderId = data.replace('approve_', '');
+            await processOrderApproval(bot, chatId, orderId);
+        }
+        return;
+    }
+    
+    if (data.startsWith('reject_')) {
+        if (userId.toString() === process.env.ADMIN_ID) {
+            const orderId = data.replace('reject_', '');
+            await processOrderRejection(bot, chatId, orderId);
+        }
+        return;
+    }
+    
+    if (data.startsWith('recover_')) {
+        if (userId.toString() === process.env.ADMIN_ID) {
+            const orderId = data.replace('recover_', '');
+            adminState[chatId] = { action: 'recovery_code', orderId };
+            await bot.sendMessage(chatId, '📝 Send new voucher code for recovery:');
+        }
+        return;
+    }
+    
+    if (data.startsWith('norecover_')) {
+        if (userId.toString() === process.env.ADMIN_ID) {
+            const orderId = data.replace('norecover_', '');
+            const order = db.getOrder(orderId);
+            if (order) {
+                await bot.sendMessage(order.userId, 
+                    `❌ **Recovery Failed**\n\nOrder ID: \`${orderId}\`\n\nCannot recover vouchers at this time.`,
+                    { parse_mode: 'Markdown' }
+                );
+                await bot.sendMessage(chatId, '✅ User notified about recovery failure.');
+            }
+        }
+        return;
+    }
+    
+    // ==================== USER CALLBACKS ====================
     
     if (data === 'back_to_main') {
         return sendMainMenu(bot, chatId);
@@ -31,10 +94,105 @@ async function callbackHandler(bot, callbackQuery) {
         return selectQuantity(bot, chatId, userId, qty);
     }
     
+    if (data.startsWith('upload_ss_')) {
+        const orderId = data.replace('upload_ss_', '');
+        return uploadScreenshot(bot, chatId, userId, orderId);
+    }
+    
+    if (data.startsWith('view_order_')) {
+        const orderId = data.replace('view_order_', '');
+        return viewOrder(bot, chatId, orderId);
+    }
+    
     if (data === 'back_to_categories') {
         const { buyVouchers } = require('../commands/user');
         return buyVouchers(bot, { chat: { id: chatId }, from: { id: userId } });
     }
+    
+    if (data === 'back_to_orders') {
+        return myOrders(bot, { chat: { id: chatId }, from: { id: userId } });
+    }
+}
+
+async function processOrderApproval(bot, chatId, orderId) {
+    const order = db.getOrder(orderId);
+    if (!order) return;
+    
+    // Get available vouchers
+    const vouchers = db.getAvailableVouchers(order.categoryId);
+    
+    if (vouchers.length < order.quantity) {
+        return bot.sendMessage(chatId, 
+            `❌ **Insufficient Stock!**\nAvailable: ${vouchers.length}\nRequired: ${order.quantity}`,
+            { parse_mode: 'Markdown' }
+        );
+    }
+    
+    // Assign vouchers
+    const assignedCodes = [];
+    for (let i = 0; i < order.quantity; i++) {
+        const voucher = vouchers[i];
+        db.assignVoucher(voucher.id, order.userId, orderId);
+        assignedCodes.push(voucher.code);
+    }
+    
+    // Update order status
+    db.updateOrderStatus(orderId, 'delivered');
+    
+    // Send vouchers to user
+    const voucherMsg = `✅ **Payment Approved! Vouchers Delivered**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Order ID:** \`${orderId}\`
+**Category:** ${order.categoryName}
+**Quantity:** ${order.quantity}
+
+**Your Vouchers:**
+${assignedCodes.map((c, i) => `${i+1}. \`${c}\``).join('\n')}
+
+Thank you for shopping with us! 🎉`;
+
+    await bot.sendMessage(order.userId, voucherMsg, { parse_mode: 'Markdown' });
+    
+    // Send notification to channel
+    const user = db.getUser(order.userId);
+    await bot.sendMessage(process.env.CHANNEL_2,
+        `🎯 **New Order Delivered**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+╰➤👤 **User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})
+╰➤🆔 **User ID:** \`${order.userId}\`
+╰➤📡 **Status:** ✅ Success
+╰➤📦 **Category:** ${order.categoryName}
+╰➤🔢 **Quantity:** ${order.quantity}
+╰➤💰 **Amount:** ₹${order.totalPrice}
+
+🤖 **Bot:** @SheinVoucherHub_Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+        { parse_mode: 'Markdown' }
+    );
+    
+    await bot.sendMessage(chatId, `✅ Order ${orderId} approved! Vouchers sent.`);
+}
+
+async function processOrderRejection(bot, chatId, orderId) {
+    const order = db.getOrder(orderId);
+    if (!order) return;
+    
+    db.updateOrderStatus(orderId, 'rejected', 'Payment verification failed');
+    
+    await bot.sendMessage(order.userId,
+        `❌ **Payment Rejected**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Order ID:** \`${orderId}\`
+
+Your payment could not be verified.
+Please contact ${process.env.SUPPORT_BOT} if you think this is a mistake.`,
+        { parse_mode: 'Markdown' }
+    );
+    
+    await bot.sendMessage(chatId, `✅ Order ${orderId} rejected. User notified.`);
 }
 
 module.exports = { callbackHandler };
