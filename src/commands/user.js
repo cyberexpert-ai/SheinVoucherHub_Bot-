@@ -16,7 +16,6 @@ async function buyVouchers(bot, msg) {
         return bot.sendMessage(chatId, '❌ No categories available at the moment.');
     }
     
-    // Create keyboard exactly like the image
     const keyboard = {
         inline_keyboard: categories.map(cat => {
             const availableVouchers = db.getAvailableVouchersCount(cat.id);
@@ -45,7 +44,6 @@ async function selectCategory(bot, chatId, userId, categoryId) {
     
     const prices = cat.prices;
     
-    // Store category in user state
     userState[userId] = {
         categoryId: cat.id,
         categoryName: cat.name,
@@ -54,25 +52,29 @@ async function selectCategory(bot, chatId, userId, categoryId) {
         step: 'selecting_quantity'
     };
     
-    // Create price display exactly like the image
+    // শুধু অ্যাডমিন যেসব কোয়ান্টিটি সেট করেছে সেগুলো দেখাবে
     let priceText = `**${cat.name}**\n`;
     priceText += `Available stock: ${availableVouchers} codes\n\n`;
     priceText += `**Available Packages (per-code):**\n`;
-    priceText += `- 1 Code → ₹${prices[1]}.00 / code\n`;
-    priceText += `- 5 Codes → ₹${prices[5]}.00 / code\n`;
-    priceText += `- 10 Codes → ₹${prices[10]}.00 / code\n`;
-    priceText += `- 20+ Codes → ₹${prices[20]}.00 / code\n\n`;
-    priceText += `**Select quantity:**`;
     
-    // Create quantity buttons exactly like the image
+    // প্রাইস গুলো সর্ট করে দেখান
+    const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
+    quantities.forEach(qty => {
+        priceText += `- ${qty} Code${qty > 1 ? 's' : ''} → ₹${prices[qty]}.00 / code\n`;
+    });
+    
+    priceText += `\n**Select quantity:**`;
+    
+    // কোয়ান্টিটি বাটন তৈরি করুন
+    const qtyButtons = quantities.map(qty => {
+        return [{ text: `${qty} code${qty > 1 ? 's' : ''}`, callback_data: `qty_${qty}` }];
+    });
+    
+    qtyButtons.push([{ text: 'Other amount', callback_data: 'qty_custom' }]);
+    qtyButtons.push([{ text: 'Back', callback_data: 'back_to_categories' }]);
+    
     const keyboard = {
-        inline_keyboard: [
-            [{ text: '1 code', callback_data: 'qty_1' }],
-            [{ text: '5 codes', callback_data: 'qty_5' }],
-            [{ text: '10 codes', callback_data: 'qty_10' }],
-            [{ text: 'Other amount', callback_data: 'qty_custom' }],
-            [{ text: 'Back', callback_data: 'back_to_categories' }]
-        ]
+        inline_keyboard: qtyButtons
     };
     
     await bot.sendMessage(chatId, priceText, {
@@ -86,7 +88,8 @@ async function selectQuantity(bot, chatId, userId, quantity) {
     
     if (quantity === 'custom') {
         userState[userId].step = 'awaiting_qty';
-        return bot.sendMessage(chatId, '📝 **Enter quantity** (max available):', {
+        return bot.sendMessage(chatId, '📝 **Enter quantity** (max available):\n\nExample: `7`', {
+            parse_mode: 'Markdown',
             reply_markup: { force_reply: true }
         });
     }
@@ -98,7 +101,6 @@ async function selectQuantity(bot, chatId, userId, quantity) {
         return bot.sendMessage(chatId, `❌ Only ${state.availableVouchers} codes available!`);
     }
     
-    // Calculate total price
     const pricePerCode = db.getPriceForQuantity(state.categoryId, qty);
     const total = pricePerCode * qty;
     
@@ -114,6 +116,76 @@ async function selectQuantity(bot, chatId, userId, quantity) {
     };
     
     await sendPaymentInstructions(bot, chatId, userId, state.categoryName, qty, total, pricePerCode, orderId);
+}
+
+async function handleCustomQuantity(bot, chatId, userId, text) {
+    const state = userState[userId];
+    const qty = parseInt(text);
+    
+    if (isNaN(qty) || qty < 1) {
+        await bot.sendMessage(chatId, '❌ Please enter a valid positive number!', {
+            reply_markup: { force_reply: true }
+        });
+        return;
+    }
+    
+    if (qty > state.availableVouchers) {
+        await bot.sendMessage(chatId, `❌ Only ${state.availableVouchers} codes available!`, {
+            reply_markup: { force_reply: true }
+        });
+        return;
+    }
+    
+    const pricePerCode = db.getPriceForQuantity(state.categoryId, qty);
+    const total = pricePerCode * qty;
+    
+    const confirmMsg = `📊 **Price Calculation**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Category: ${state.categoryName}
+Quantity: ${qty} codes
+Price per code: ₹${pricePerCode}
+Total Amount: ₹${total}
+
+Do you want to proceed?`;
+
+    const keyboard = {
+        inline_keyboard: [
+            [
+                { text: '✅ Yes, Proceed', callback_data: `confirm_qty_${qty}` },
+                { text: '❌ No, Cancel', callback_data: 'back_to_categories' }
+            ]
+        ]
+    };
+    
+    userState[userId].tempQty = qty;
+    userState[userId].tempTotal = total;
+    userState[userId].tempPricePerCode = pricePerCode;
+    userState[userId].step = 'confirming_qty';
+    
+    await bot.sendMessage(chatId, confirmMsg, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+    });
+}
+
+async function confirmQuantity(bot, chatId, userId, qty) {
+    await deletePreviousMessage(bot, chatId, userId);
+    
+    const state = userState[userId];
+    
+    const orderId = db.createOrder(userId, state.categoryId, qty, state.tempTotal);
+    
+    userState[userId] = {
+        ...state,
+        orderId,
+        quantity: qty,
+        total: state.tempTotal,
+        pricePerCode: state.tempPricePerCode,
+        step: 'payment'
+    };
+    
+    await sendPaymentInstructions(bot, chatId, userId, state.categoryName, qty, state.tempTotal, state.tempPricePerCode, orderId);
 }
 
 async function sendPaymentInstructions(bot, chatId, userId, category, quantity, total, pricePerCode, orderId) {
@@ -168,8 +240,11 @@ async function handleScreenshot(bot, msg) {
     const userId = msg.from.id;
     const text = msg.text;
     
+    console.log('handleScreenshot called with step:', userState[userId]?.step);
+    
     // যদি ফটো আসে
     if (msg.photo) {
+        console.log('Photo received');
         const photo = msg.photo[msg.photo.length - 1];
         const fileId = photo.file_id;
         
@@ -188,10 +263,12 @@ async function handleScreenshot(bot, msg) {
     
     // যদি UTR এর জন্য অপেক্ষা করছে
     if (userState[userId]?.step === 'awaiting_utr') {
+        console.log('Awaiting UTR, received text:', text);
         const state = userState[userId];
         
         // যদি ইউজার /start দেয়
         if (text === '/start') {
+            console.log('User sent /start, clearing state');
             delete userState[userId];
             const { startCommand } = require('./start');
             return startCommand(bot, msg);
@@ -199,6 +276,7 @@ async function handleScreenshot(bot, msg) {
         
         // যদি ইউজার ব্যাক বলে
         if (text === '← Back' || text === '← Back to Menu' || text === 'Back' || text === 'back') {
+            console.log('User sent back command, clearing state');
             delete userState[userId];
             const { startCommand } = require('./start');
             return startCommand(bot, msg);
@@ -206,9 +284,11 @@ async function handleScreenshot(bot, msg) {
         
         // UTR ভ্যালিডেশন
         const utr = text.trim().toUpperCase();
+        console.log('Validating UTR:', utr);
         
-        // UTR ফরম্যাট চেক (শুধু লেটার ও নাম্বার, ৬-৩০ অক্ষর)
+        // UTR ফরম্যাট চেক
         if (!/^[A-Z0-9]{6,30}$/.test(utr)) {
+            console.log('Invalid UTR format');
             return bot.sendMessage(chatId, 
                 '❌ **Invalid UTR Format!**\n\n' +
                 'UTR should be 6-30 characters long and contain only letters and numbers.\n\n' +
@@ -223,6 +303,7 @@ async function handleScreenshot(bot, msg) {
         
         // চেক করে UTR আগে ব্যবহার করা হয়েছে কিনা
         if (db.isUTRUsed(utr)) {
+            console.log('UTR already used');
             db.addWarning(userId, 'Duplicate UTR');
             return bot.sendMessage(chatId, 
                 '❌ **This UTR has already been used!**\n\n' +
@@ -235,6 +316,8 @@ async function handleScreenshot(bot, msg) {
             );
         }
         
+        console.log('UTR is valid, processing payment');
+        
         // UTR মার্ক as used
         db.addUsedUTR(utr);
         
@@ -242,7 +325,7 @@ async function handleScreenshot(bot, msg) {
         db.updateOrderPayment(state.orderId, utr, state.screenshot);
         
         // Add warning for suspicious UTR
-        if (utr.includes('FAKE') || utr.includes('TEST') || utr.includes('DEMO') || utr.includes('123')) {
+        if (utr.includes('FAKE') || utr.includes('TEST') || utr.includes('DEMO') || utr.includes('123456')) {
             db.addWarning(userId, 'Suspicious UTR');
         }
         
@@ -268,34 +351,20 @@ Thank you for your patience! 🙏`,
         // Clear user state
         delete userState[userId];
         
-        // Return to main menu after submission
-        setTimeout(async () => {
-            const { startCommand } = require('./start');
-            await startCommand(bot, { chat: { id: chatId }, from: { id: userId } });
-        }, 3000);
-        
         return;
     }
     
     // যদি অন্য কোন স্টেটে থাকে
     if (userState[userId]) {
-        // Handle quantity input
+        console.log('User state:', userState[userId].step);
+        
         if (userState[userId].step === 'awaiting_qty') {
-            const state = userState[userId];
-            const qty = parseInt(text);
-            
-            if (isNaN(qty) || qty < 1 || qty > state.availableVouchers) {
-                return bot.sendMessage(chatId, `❌ Please enter a valid quantity (1-${state.availableVouchers}):`, {
-                    reply_markup: { force_reply: true }
-                });
-            }
-            
-            delete userState[userId].step;
-            return selectQuantity(bot, chatId, userId, qty.toString());
+            console.log('Handling custom quantity');
+            return handleCustomQuantity(bot, chatId, userId, text);
         }
         
-        // Handle recovery input
         if (userState[userId].step === 'awaiting_recovery') {
+            console.log('Handling recovery');
             const orderId = text.trim();
             
             if (orderId === '← Back to Menu' || orderId === '← Back' || orderId === 'Back') {
@@ -304,7 +373,6 @@ Thank you for your patience! 🙏`,
                 return startCommand(bot, msg);
             }
             
-            // Process recovery
             await bot.sendMessage(chatId, `⏳ **Processing recovery request for Order** \`${orderId}\`...`, {
                 parse_mode: 'Markdown'
             });
@@ -335,7 +403,6 @@ Thank you for your patience! 🙏`,
                 return;
             }
             
-            // Notify admin
             const order = recovery.order;
             const user = db.getUser(userId);
             
@@ -408,7 +475,6 @@ async function notifyAdmin(bot, orderId, userId, utr, screenshot) {
         }
     });
     
-    // Forward screenshot
     if (screenshot) {
         await bot.sendPhoto(process.env.ADMIN_ID, screenshot, {
             caption: `📸 Screenshot for Order ${orderId}`
@@ -435,7 +501,6 @@ async function myOrders(bot, msg) {
         });
     }
     
-    // Sort orders by date (newest first)
     const sortedOrders = orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     
     let text = '📦 **Your Orders**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
@@ -484,7 +549,6 @@ async function viewOrder(bot, chatId, orderId) {
     if (order.status === 'delivered') {
         text += '✅ Delivered';
         
-        // Get vouchers for this order
         const vouchers = db.getVouchers(order.categoryId)
             .filter(v => v.orderId === orderId);
         
@@ -597,6 +661,64 @@ async function disclaimer(bot, msg) {
     });
 }
 
+// ==================== USER CALLBACK HANDLER ====================
+async function handleUserCallback(bot, callbackQuery) {
+    const chatId = callbackQuery.message.chat.id;
+    const userId = callbackQuery.from.id;
+    const data = callbackQuery.data;
+    const messageId = callbackQuery.message.message_id;
+    
+    await bot.answerCallbackQuery(callbackQuery.id);
+    await bot.deleteMessage(chatId, messageId).catch(() => {});
+    
+    if (data.startsWith('select_cat_')) {
+        const id = data.split('_')[2];
+        return selectCategory(bot, chatId, userId, id);
+    }
+    
+    if (data.startsWith('qty_')) {
+        const qty = data.split('_')[1];
+        return selectQuantity(bot, chatId, userId, qty);
+    }
+    
+    if (data.startsWith('confirm_qty_')) {
+        const qty = parseInt(data.replace('confirm_qty_', ''));
+        return confirmQuantity(bot, chatId, userId, qty);
+    }
+    
+    if (data.startsWith('upload_ss_')) {
+        const orderId = data.replace('upload_ss_', '');
+        return uploadScreenshot(bot, chatId, userId, orderId);
+    }
+    
+    if (data.startsWith('view_order_')) {
+        const orderId = data.replace('view_order_', '');
+        return viewOrder(bot, chatId, orderId);
+    }
+    
+    if (data === 'qty_custom') {
+        userState[userId].step = 'awaiting_qty';
+        return bot.sendMessage(chatId, '📝 **Enter quantity** (max available):\n\nExample: `7`', {
+            parse_mode: 'Markdown',
+            reply_markup: { force_reply: true }
+        });
+    }
+    
+    if (data === 'back_to_categories') {
+        const { buyVouchers } = require('./user');
+        return buyVouchers(bot, { chat: { id: chatId }, from: { id: userId } });
+    }
+    
+    if (data === 'back_to_orders') {
+        return myOrders(bot, { chat: { id: chatId }, from: { id: userId } });
+    }
+    
+    if (data === 'back_to_main') {
+        const { startCommand } = require('./start');
+        return startCommand(bot, { chat: { id: chatId }, from: { id: userId } });
+    }
+}
+
 // ==================== EXPORT ====================
 module.exports = {
     buyVouchers,
@@ -604,6 +726,7 @@ module.exports = {
     selectQuantity,
     uploadScreenshot,
     handleScreenshot,
+    handleUserCallback,
     myOrders,
     viewOrder,
     recoverVouchers,
