@@ -166,7 +166,9 @@ async function uploadScreenshot(bot, chatId, userId, orderId) {
 async function handleScreenshot(bot, msg) {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
+    const text = msg.text;
     
+    // যদি ফটো আসে
     if (msg.photo) {
         const photo = msg.photo[msg.photo.length - 1];
         const fileId = photo.file_id;
@@ -177,41 +179,70 @@ async function handleScreenshot(bot, msg) {
             step: 'awaiting_utr'
         };
         
-        await bot.sendMessage(chatId, '📝 **Enter UTR/Transaction ID**', {
+        await bot.sendMessage(chatId, '📝 **Enter UTR/Transaction ID**\n\nExample: `UTR123456789`', {
             parse_mode: 'Markdown',
             reply_markup: { force_reply: true }
         });
-        
-    } else if (msg.text && userState[userId]?.step === 'awaiting_utr') {
-        const utr = msg.text.trim().toUpperCase();
+        return;
+    }
+    
+    // যদি UTR এর জন্য অপেক্ষা করছে
+    if (userState[userId]?.step === 'awaiting_utr') {
         const state = userState[userId];
         
-        // Check if it's actually a back command
-        if (utr === '← BACK' || utr === '← BACK TO MENU' || utr === 'BACK') {
+        // যদি ইউজার /start দেয়
+        if (text === '/start') {
             delete userState[userId];
             const { startCommand } = require('./start');
             return startCommand(bot, msg);
         }
         
-        // Validate UTR
-        if (!/^[A-Z0-9]{6,30}$/.test(utr)) {
-            return bot.sendMessage(chatId, '❌ Invalid UTR format! Please enter valid UTR.');
+        // যদি ইউজার ব্যাক বলে
+        if (text === '← Back' || text === '← Back to Menu' || text === 'Back' || text === 'back') {
+            delete userState[userId];
+            const { startCommand } = require('./start');
+            return startCommand(bot, msg);
         }
         
-        // Check if UTR already used
+        // UTR ভ্যালিডেশন
+        const utr = text.trim().toUpperCase();
+        
+        // UTR ফরম্যাট চেক (শুধু লেটার ও নাম্বার, ৬-৩০ অক্ষর)
+        if (!/^[A-Z0-9]{6,30}$/.test(utr)) {
+            return bot.sendMessage(chatId, 
+                '❌ **Invalid UTR Format!**\n\n' +
+                'UTR should be 6-30 characters long and contain only letters and numbers.\n\n' +
+                'Example: `UTR123456789`\n\n' +
+                'Please try again:',
+                { 
+                    parse_mode: 'Markdown',
+                    reply_markup: { force_reply: true }
+                }
+            );
+        }
+        
+        // চেক করে UTR আগে ব্যবহার করা হয়েছে কিনা
         if (db.isUTRUsed(utr)) {
             db.addWarning(userId, 'Duplicate UTR');
-            return bot.sendMessage(chatId, '❌ This UTR has already been used! Fake payment detected.');
+            return bot.sendMessage(chatId, 
+                '❌ **This UTR has already been used!**\n\n' +
+                'Fake payment detected.\n\n' +
+                'Please try again with correct UTR:',
+                { 
+                    parse_mode: 'Markdown',
+                    reply_markup: { force_reply: true }
+                }
+            );
         }
         
-        // Mark UTR as used
+        // UTR মার্ক as used
         db.addUsedUTR(utr);
         
         // Update order with payment
         db.updateOrderPayment(state.orderId, utr, state.screenshot);
         
         // Add warning for suspicious UTR
-        if (utr.includes('FAKE') || utr.includes('TEST') || utr.includes('DEMO')) {
+        if (utr.includes('FAKE') || utr.includes('TEST') || utr.includes('DEMO') || utr.includes('123')) {
             db.addWarning(userId, 'Suspicious UTR');
         }
         
@@ -234,13 +265,116 @@ Thank you for your patience! 🙏`,
         // Notify admin
         await notifyAdmin(bot, state.orderId, userId, utr, state.screenshot);
         
+        // Clear user state
+        delete userState[userId];
+        
         // Return to main menu after submission
         setTimeout(async () => {
             const { startCommand } = require('./start');
             await startCommand(bot, { chat: { id: chatId }, from: { id: userId } });
         }, 3000);
         
-        delete userState[userId];
+        return;
+    }
+    
+    // যদি অন্য কোন স্টেটে থাকে
+    if (userState[userId]) {
+        // Handle quantity input
+        if (userState[userId].step === 'awaiting_qty') {
+            const state = userState[userId];
+            const qty = parseInt(text);
+            
+            if (isNaN(qty) || qty < 1 || qty > state.availableVouchers) {
+                return bot.sendMessage(chatId, `❌ Please enter a valid quantity (1-${state.availableVouchers}):`, {
+                    reply_markup: { force_reply: true }
+                });
+            }
+            
+            delete userState[userId].step;
+            return selectQuantity(bot, chatId, userId, qty.toString());
+        }
+        
+        // Handle recovery input
+        if (userState[userId].step === 'awaiting_recovery') {
+            const orderId = text.trim();
+            
+            if (orderId === '← Back to Menu' || orderId === '← Back' || orderId === 'Back') {
+                delete userState[userId];
+                const { startCommand } = require('./start');
+                return startCommand(bot, msg);
+            }
+            
+            // Process recovery
+            await bot.sendMessage(chatId, `⏳ **Processing recovery request for Order** \`${orderId}\`...`, {
+                parse_mode: 'Markdown'
+            });
+            
+            const recovery = db.canRecover(orderId, userId);
+            
+            if (!recovery.can) {
+                let errorMsg = '';
+                if (recovery.reason === 'not_found') {
+                    errorMsg = `⚠️ **Order not found:** \`${orderId}\``;
+                } else if (recovery.reason === 'wrong_user') {
+                    errorMsg = '❌ **This order belongs to another user!**';
+                } else if (recovery.reason === 'not_delivered') {
+                    errorMsg = '❌ **This order is not delivered yet!**';
+                } else if (recovery.reason === 'expired') {
+                    errorMsg = '⏰ **Recovery period expired** (2 hours limit)';
+                }
+                
+                await bot.sendMessage(chatId, errorMsg, {
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        keyboard: [['← Back to Menu']],
+                        resize_keyboard: true
+                    }
+                });
+                
+                delete userState[userId];
+                return;
+            }
+            
+            // Notify admin
+            const order = recovery.order;
+            const user = db.getUser(userId);
+            
+            const adminMsg = `🔄 **Recovery Request**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**Order ID:** \`${orderId}\`
+**User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})
+**User ID:** \`${userId}\`
+**Category:** ${order.categoryName}
+**Quantity:** ${order.quantity}
+**Amount:** ₹${order.totalPrice}
+**Original Delivery:** ${new Date(order.deliveredAt || order.createdAt).toLocaleString()}
+
+**Action Required:** Process recovery`;
+
+            await bot.sendMessage(process.env.ADMIN_ID, adminMsg, {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    inline_keyboard: [
+                        [
+                            { text: '✅ Send New Code', callback_data: `recover_${orderId}` },
+                            { text: '❌ Cannot Recover', callback_data: `norecover_${orderId}` }
+                        ]
+                    ]
+                }
+            });
+            
+            await bot.sendMessage(chatId, '✅ **Recovery request sent to admin.** You will receive response soon.', {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    keyboard: [['← Back to Menu']],
+                    resize_keyboard: true
+                }
+            });
+            
+            delete userState[userId];
+            return;
+        }
     }
 }
 
@@ -409,89 +543,6 @@ Example: \`SVH-20260219-ABC123\`
     userState[msg.from.id] = { step: 'awaiting_recovery' };
 }
 
-async function handleRecovery(bot, msg) {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const orderId = msg.text.trim();
-    
-    // Check if it's actually a back command
-    if (orderId === '← Back to Menu' || orderId === '← Back' || orderId === 'Back') {
-        delete userState[userId];
-        const { startCommand } = require('./start');
-        return startCommand(bot, msg);
-    }
-    
-    // Show processing message
-    await bot.sendMessage(chatId, `⏳ **Processing recovery request for Order** \`${orderId}\`...`, {
-        parse_mode: 'Markdown'
-    });
-    
-    const recovery = db.canRecover(orderId, userId);
-    
-    if (!recovery.can) {
-        let errorMsg = '';
-        if (recovery.reason === 'not_found') {
-            errorMsg = `⚠️ **Order not found:** \`${orderId}\``;
-        } else if (recovery.reason === 'wrong_user') {
-            errorMsg = '❌ **This order belongs to another user!**';
-        } else if (recovery.reason === 'not_delivered') {
-            errorMsg = '❌ **This order is not delivered yet!**';
-        } else if (recovery.reason === 'expired') {
-            errorMsg = '⏰ **Recovery period expired** (2 hours limit)';
-        }
-        
-        await bot.sendMessage(chatId, errorMsg, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                keyboard: [['← Back to Menu']],
-                resize_keyboard: true
-            }
-        });
-        
-        delete userState[userId];
-        return;
-    }
-    
-    // Notify admin
-    const order = recovery.order;
-    const user = db.getUser(userId);
-    
-    const adminMsg = `🔄 **Recovery Request**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-**Order ID:** \`${orderId}\`
-**User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})
-**User ID:** \`${userId}\`
-**Category:** ${order.categoryName}
-**Quantity:** ${order.quantity}
-**Amount:** ₹${order.totalPrice}
-**Original Delivery:** ${new Date(order.deliveredAt || order.createdAt).toLocaleString()}
-
-**Action Required:** Process recovery`;
-
-    await bot.sendMessage(process.env.ADMIN_ID, adminMsg, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: '✅ Send New Code', callback_data: `recover_${orderId}` },
-                    { text: '❌ Cannot Recover', callback_data: `norecover_${orderId}` }
-                ]
-            ]
-        }
-    });
-    
-    await bot.sendMessage(chatId, '✅ **Recovery request sent to admin.** You will receive response soon.', {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            keyboard: [['← Back to Menu']],
-            resize_keyboard: true
-        }
-    });
-    
-    delete userState[userId];
-}
-
 // ==================== SUPPORT ====================
 async function support(bot, msg) {
     const chatId = msg.chat.id;
@@ -556,7 +607,6 @@ module.exports = {
     myOrders,
     viewOrder,
     recoverVouchers,
-    handleRecovery,
     support,
     disclaimer,
     userState
