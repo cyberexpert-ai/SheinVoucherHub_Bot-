@@ -25,18 +25,18 @@ async function messageHandler(bot, msg) {
     // ==================== CHECK BLOCKED ====================
     if (db.isUserBlocked(userId)) {
         const blocked = db.getBlockedUsers().find(b => b.id === userId);
-        let msg = '⛔ **You are blocked!**\n';
+        let msgText = '⛔ **You are blocked!**\n';
         
         if (blocked?.expiresAt) {
             const expiry = new Date(blocked.expiresAt);
-            msg += `\n**Reason:** ${blocked.reason}\n**Expires:** ${expiry.toLocaleString()}`;
+            msgText += `\n**Reason:** ${blocked.reason}\n**Expires:** ${expiry.toLocaleString()}`;
         } else {
-            msg += `\n**Reason:** ${blocked?.reason || 'Violation of rules'}`;
+            msgText += `\n**Reason:** ${blocked?.reason || 'Violation of rules'}`;
         }
         
-        msg += `\n\nContact ${process.env.SUPPORT_BOT} for appeal.`;
+        msgText += `\n\nContact ${process.env.SUPPORT_BOT} for appeal.`;
         
-        return bot.sendMessage(chatId, msg, {
+        return bot.sendMessage(chatId, msgText, {
             parse_mode: 'Markdown',
             reply_markup: {
                 inline_keyboard: [
@@ -63,8 +63,8 @@ async function messageHandler(bot, msg) {
         const qty = parseInt(text);
         const state = userState[userId];
         
-        if (isNaN(qty) || qty < 1 || qty > state.maxStock) {
-            return bot.sendMessage(chatId, `❌ Please enter a valid quantity (1-${state.maxStock}):`);
+        if (isNaN(qty) || qty < 1 || qty > state.stock) {
+            return bot.sendMessage(chatId, `❌ Please enter a valid quantity (1-${state.stock}):`);
         }
         
         delete userState[userId].step;
@@ -85,7 +85,9 @@ async function messageHandler(bot, msg) {
         case '🔁 Recover Vouchers': return recoverVouchers(bot, msg);
         case '🆘 Support': return support(bot, msg);
         case '📜 Disclaimer': return disclaimer(bot, msg);
-        case '🔙 Back': return startCommand(bot, msg);
+        case '← Back to Menu':
+        case '← Back':
+            return startCommand(bot, msg);
         default: return; // Silent ignore
     }
 }
