@@ -1,13 +1,8 @@
-const { startCommand, sendMainMenu } = require('../commands/start');
+const { sendMainMenu } = require('../commands/start');
 const { adminCommand, handleAdminCallback } = require('../commands/admin');
 const { 
-    selectCategory, selectQuantity, viewOrder, myOrders,
-    showQRCode
+    selectCategory, selectQuantity, viewOrder, myOrders 
 } = require('../commands/user');
-const { 
-    approvePayment,
-    rejectPayment 
-} = require('./paymentHandler');
 const { channelCheckMiddleware } = require('../middlewares/channelCheck');
 const { userState } = require('../commands/user');
 
@@ -31,35 +26,6 @@ async function callbackHandler(bot, callbackQuery) {
     // ==================== ADMIN CALLBACKS ====================
     if (data.startsWith('admin_')) {
         return handleAdminCallback(bot, callbackQuery);
-    }
-    
-    // ==================== PAYMENT CALLBACKS ====================
-    if (data.startsWith('approve_')) {
-        if (userId.toString() === process.env.ADMIN_ID) {
-            const orderId = data.replace('approve_', '');
-            return approvePayment(bot, chatId, orderId);
-        }
-    }
-    
-    if (data.startsWith('reject_')) {
-        if (userId.toString() === process.env.ADMIN_ID) {
-            const orderId = data.replace('reject_', '');
-            return rejectPayment(bot, chatId, orderId, 'Payment verification failed');
-        }
-    }
-    
-    if (data.startsWith('show_qr_')) {
-        const orderId = data.replace('show_qr_', '');
-        const amount = userState[userId]?.totalPrice || 0;
-        return showQRCode(bot, chatId, orderId, amount);
-    }
-    
-    if (data.startsWith('upload_ss_')) {
-        userState[userId] = userState[userId] || {};
-        userState[userId].awaitingScreenshot = true;
-        return bot.sendMessage(chatId, '📸 Please send the payment screenshot:', {
-            reply_markup: { force_reply: true }
-        });
     }
     
     // ==================== CATEGORY SELECTION ====================
@@ -92,7 +58,7 @@ async function callbackHandler(bot, callbackQuery) {
     }
     
     // ==================== BACK TO MAIN ====================
-    if (data === 'back_to_main' || data === 'cancel_payment' || data === 'cancel_order') {
+    if (data === 'back_to_main') {
         return sendMainMenu(bot, chatId);
     }
 }
