@@ -117,6 +117,13 @@ async function handleAdminInput(bot, msg) {
     
     if (!state) return;
     
+    // Check if it's a back command
+    if (text === '← Back' || text === '← Exit Admin' || text === 'Back') {
+        delete adminState[chatId];
+        await adminCommand(bot, msg);
+        return;
+    }
+    
     switch(state.action) {
         // ===== ADD CATEGORY - শুধু সংখ্যা দিলেই হবে =====
         case 'add_category':
@@ -126,7 +133,7 @@ async function handleAdminInput(bot, msg) {
             }
             
             const catId = db.addCategory(text);
-            await bot.sendMessage(chatId, `✅ **Category Added!**\nID: ${catId}\nName: ₹${text} Shein Voucher\nStock: 100`);
+            await bot.sendMessage(chatId, `✅ **Category Added!**\nID: ${catId}\nName: ₹${text} Shein Voucher`);
             delete adminState[chatId];
             break;
             
@@ -151,7 +158,7 @@ async function handleAdminInput(bot, msg) {
                 return;
             }
             
-            db.updateCategoryStock(stockCatId, parseInt(newStock));
+            db.updateCategoryStock(stockCatId, parseInt(newStock) - db.getCategory(stockCatId)?.stock || 0);
             await bot.sendMessage(chatId, `✅ Category ${stockCatId} stock updated to ${newStock}!`);
             delete adminState[chatId];
             break;
@@ -175,7 +182,8 @@ async function handleAdminInput(bot, msg) {
             for (const code of codes) {
                 db.addVoucher(code, state.categoryId);
             }
-            await bot.sendMessage(chatId, `✅ ${codes.length} vouchers added to category!`);
+            const cat = db.getCategory(state.categoryId);
+            await bot.sendMessage(chatId, `✅ ${codes.length} vouchers added to category!\nCurrent stock: ${cat.stock}`);
             delete adminState[chatId];
             break;
             
@@ -337,7 +345,7 @@ async function showCategoryManagement(bot, chatId) {
         cats.forEach(c => {
             const availableVouchers = db.getAvailableVouchersCount(c.id);
             msg += `**ID ${c.id}:** ${c.name}\n`;
-            msg += `├ Stock: ${c.stock} | Vouchers: ${availableVouchers}\n`;
+            msg += `├ Stock: ${c.stock} | Vouchers: ${availableVouchers} | Sold: ${c.sold}\n`;
             msg += `├ Prices: 1→₹${c.prices[1]}, 5→₹${c.prices[5]}, 10→₹${c.prices[10]}, 20+→₹${c.prices[20]}\n\n`;
         });
         msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSend a number to add new category`;
@@ -366,7 +374,7 @@ async function showVoucherManagement(bot, chatId) {
         inline_keyboard: cats.map(cat => {
             const available = db.getAvailableVouchersCount(cat.id);
             return [{
-                text: `${cat.name} (Available: ${available})`,
+                text: `${cat.name} (Available: ${available} / Stock: ${cat.stock})`,
                 callback_data: `admin_select_cat_${cat.id}`
             }];
         })
