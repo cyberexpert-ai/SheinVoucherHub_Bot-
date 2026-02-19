@@ -7,6 +7,8 @@ const {
 const db = require('../database/database');
 const { checkChannels } = require('../middlewares/channelCheck');
 
+let adminState = {};
+
 async function callbackHandler(bot, callbackQuery) {
     const chatId = callbackQuery.message.chat.id;
     const userId = callbackQuery.from.id;
@@ -146,6 +148,8 @@ async function processOrderApproval(bot, chatId, orderId) {
 **Order ID:** \`${orderId}\`
 **Category:** ${order.categoryName}
 **Quantity:** ${order.quantity}
+**Price per code:** ₹${order.pricePerCode}
+**Total:** ₹${order.totalPrice}
 
 **Your Vouchers:**
 ${assignedCodes.map((c, i) => `${i+1}. \`${c}\``).join('\n')}
@@ -153,6 +157,12 @@ ${assignedCodes.map((c, i) => `${i+1}. \`${c}\``).join('\n')}
 Thank you for shopping with us! 🎉`;
 
     await bot.sendMessage(order.userId, voucherMsg, { parse_mode: 'Markdown' });
+    
+    // Return to main menu for user
+    setTimeout(async () => {
+        const { sendMainMenu } = require('../commands/start');
+        await sendMainMenu(bot, order.userId);
+    }, 2000);
     
     // Send notification to channel
     const user = db.getUser(order.userId);
@@ -191,6 +201,12 @@ Your payment could not be verified.
 Please contact ${process.env.SUPPORT_BOT} if you think this is a mistake.`,
         { parse_mode: 'Markdown' }
     );
+    
+    // Return to main menu for user
+    setTimeout(async () => {
+        const { sendMainMenu } = require('../commands/start');
+        await sendMainMenu(bot, order.userId);
+    }, 2000);
     
     await bot.sendMessage(chatId, `✅ Order ${orderId} rejected. User notified.`);
 }
