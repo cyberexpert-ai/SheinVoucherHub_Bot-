@@ -5,6 +5,7 @@ const bodyParser = require('body-parser');
 const cron = require('node-cron');
 const { messageHandler } = require('./handlers/messageHandler');
 const { callbackHandler } = require('./handlers/callbackHandler');
+const { initDatabase } = require('./database/database');
 
 dotenv.config();
 
@@ -16,15 +17,20 @@ const app = express();
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Store bot instance globally
+// Global variables
 global.bot = bot;
-
-// Admin Mode State
 global.adminMode = false;
 global.adminChatId = null;
 
-// ==================== Bot Message Handlers ====================
+// Initialize database
+initDatabase();
 
+// Scheduled tasks
+cron.schedule('*/30 * * * *', () => {
+    console.log('Running cleanup tasks...');
+});
+
+// Message handler
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -36,25 +42,15 @@ bot.on('message', async (msg) => {
     }
 
     // Check if blocked
-    const { authMiddleware } = require('./middlewares/auth');
-    const isBlocked = await authMiddleware.checkBlocked(userId);
-    if (isBlocked) {
+    const { isUserBlocked } = require('./database/database');
+    if (isUserBlocked(userId)) {
         return bot.sendMessage(chatId, '⛔ You are blocked. Contact @SheinVoucherHub');
-    }
-
-    // Check channel membership for non-start commands
-    if (text !== '/start') {
-        const { channelCheckMiddleware } = require('./middlewares/channelCheck');
-        const isMember = await channelCheckMiddleware.checkChannels(bot, userId);
-        if (!isMember) {
-            return channelCheckMiddleware.sendJoinMessage(bot, chatId);
-        }
     }
 
     messageHandler(bot, msg);
 });
 
-// Handle callback queries
+// Callback handler
 bot.on('callback_query', async (callbackQuery) => {
     const userId = callbackQuery.from.id;
     
@@ -65,14 +61,9 @@ bot.on('callback_query', async (callbackQuery) => {
     callbackHandler(bot, callbackQuery);
 });
 
-// Health check endpoint
+// Health check
 app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        timestamp: Date.now(),
-        uptime: process.uptime(),
-        adminMode: global.adminMode
-    });
+    res.json({ status: 'ok', timestamp: Date.now() });
 });
 
 // Start server
