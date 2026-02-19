@@ -40,7 +40,7 @@ async function messageHandler(bot, msg) {
     // ==================== BOT STATUS CHECK ====================
     const botStatus = await getSetting('bot_status');
     if (botStatus === 'inactive') {
-        return bot.sendMessage(chatId, '⚠️ Bot is under maintenance. Please try again later.');
+        return bot.sendMessage(chatId, '⚠️ Bot is under maintenanc     e. Please try again later.');
     }
     
     // ==================== USER STATE HANDLERS ====================
