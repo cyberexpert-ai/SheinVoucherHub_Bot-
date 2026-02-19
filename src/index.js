@@ -41,6 +41,18 @@ process.on('unhandledRejection', (error) => {
     console.error('Unhandled Rejection:', error);
 });
 
+// ==================== Express Routes ====================
+
+// ✅ Root route - Render uptime check
+app.get('/', (req, res) => {
+    res.status(200).send("Bot is running");
+});
+
+// ✅ Health check route
+app.get('/health', (req, res) => {
+    res.status(200).send("OK");
+});
+
 // ==================== Bot Message Handlers ====================
 
 bot.on('message', async (msg) => {
@@ -101,20 +113,13 @@ bot.on('callback_query', async (callbackQuery) => {
     }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        timestamp: Date.now(),
-        uptime: process.uptime(),
-        adminMode: global.adminMode
-    });
-});
+// ==================== Start Server ====================
 
-// Start server
+// ⚠️ Render এর জন্য অবশ্যই এটা থাকবে
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
+app.listen(PORT, () => {
+    console.log(`Server started on port ${PORT}`);
+    console.log(`Bot is running at https://${process.env.RENDER_EXTERNAL_HOSTNAME || 'localhost'}:${PORT}`);
 });
 
 console.log('Bot started successfully!');
