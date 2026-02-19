@@ -1,5 +1,5 @@
-const { startCommand } = require('../commands/start');
-const { adminCommand, handleAdminText } = require('../commands/admin');
+const { startCommand, sendMainMenu } = require('../commands/start');
+const { adminCommand, handleAdminText, isAdminMode } = require('../commands/admin');
 const { 
     buyVouchers, myOrders, recoverVouchers, support, disclaimer 
 } = require('../commands/user');
@@ -28,19 +28,18 @@ async function messageHandler(bot, msg) {
             return adminCommand(bot, msg);
         }
         
-        const { handleAdminText } = require('../commands/admin');
         const handled = await handleAdminText(bot, msg);
         if (handled) return;
         
-        // ✅ ERROR DELETED - Admin panel-এ কিছু দেখানো হবে না
-        console.log(`Admin typed: ${text} - silently ignored`);
+        // Admin mode - silent ignore
+        console.log(`Admin: ${text} - ignored`);
         return;
     }
     
     // ==================== BOT STATUS CHECK ====================
     const botStatus = await getSetting('bot_status');
     if (botStatus === 'inactive') {
-        return bot.sendMessage(chatId, '⚠️ Bot is under maintenance. Please try again later.');
+        return bot.sendMessage(chatId, '⚠️ Bot is under maintenance.');
     }
     
     // ==================== USER STATE HANDLERS ====================
@@ -56,7 +55,7 @@ async function messageHandler(bot, msg) {
         const state = userState[userId];
         
         if (isNaN(qty) || qty < 1 || qty > parseInt(state.maxStock)) {
-            return bot.sendMessage(chatId, `❌ Please enter a valid quantity (1-${state.maxStock}):`);
+            return bot.sendMessage(chatId, `❌ Valid quantity: 1-${state.maxStock}`);
         }
         
         delete userState[userId].awaitingQty;
@@ -67,7 +66,7 @@ async function messageHandler(bot, msg) {
     // Handle recovery input
     if (userState[userId]?.action === 'recovery') {
         delete userState[userId];
-        return bot.sendMessage(chatId, '🔁 Recovery request sent to admin.');
+        return bot.sendMessage(chatId, '🔁 Recovery request sent.');
     }
     
     // ==================== MAIN MENU COMMANDS ====================
@@ -92,12 +91,11 @@ async function messageHandler(bot, msg) {
             
         case '🔙 Back to Main Menu':
         case '🔙 Back':
-            return startCommand(bot, msg);
+            return sendMainMenu(bot, chatId);
             
         default:
-            // ✅ ERROR COMPLETELY DELETED - কিছু দেখানো হবে না
-            // ইউজার যা ইচ্ছা টাইপ করুক, কিছু রেসপন্ড করবে না
-            console.log(`User ${userId} typed: ${text} - silently ignored`);
+            // ❌ NO ERROR MESSAGE - COMPLETELY SILENT
+            console.log(`User ${userId}: ${text} - ignored`);
             return;
     }
 }
