@@ -1,17 +1,11 @@
-const { 
-    getUser, 
-    isUserBlocked
-} = require('../sheets/googleSheets');
+const db = require('../database/database');
 
-const authMiddleware = {
-    async checkBlocked(userId) {
-        return await isUserBlocked(userId);
-    },
-    
-    async checkVerified(userId) {
-        const user = await getUser(userId);
-        return true; // Always verified (no captcha)
-    }
-};
+function checkBlocked(userId) {
+    return db.isUserBlocked(userId);
+}
 
-module.exports = { authMiddleware };
+function addWarning(userId, reason) {
+    return db.addWarning(userId, reason);
+}
+
+module.exports = { checkBlocked, addWarning };
