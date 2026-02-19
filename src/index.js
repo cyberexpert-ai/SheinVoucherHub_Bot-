@@ -7,7 +7,6 @@ const { setupGoogleSheets } = require('./sheets/googleSheets');
 const { messageHandler } = require('./handlers/messageHandler');
 const { callbackHandler } = require('./handlers/callbackHandler');
 const { paymentHandler } = require('./handlers/paymentHandler');
-const { adminScheduler, isAdminMode, setAdminMode } = require('./commands/admin');
 
 dotenv.config();
 
@@ -22,7 +21,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // Store bot instance globally
 global.bot = bot;
 
-// Admin Mode State - এই ভেরিয়েবল ট্র্যাক করবে অ্যাডমিন কোন মোডে আছে
+// Admin Mode State
 global.adminMode = false;
 global.adminChatId = null;
 
@@ -31,15 +30,15 @@ setupGoogleSheets();
 
 // Scheduled Tasks
 cron.schedule('0 0 * * *', () => {
-    adminScheduler.runDailyTasks();
+    console.log('Running daily tasks...');
 });
 
 cron.schedule('0 0 * * 0', () => {
-    adminScheduler.runWeeklyTasks();
+    console.log('Running weekly tasks...');
 });
 
 cron.schedule('0 0 1 * *', () => {
-    adminScheduler.runMonthlyTasks();
+    console.log('Running monthly tasks...');
 });
 
 // ==================== Bot Message Handlers ====================
@@ -49,7 +48,7 @@ bot.on('message', async (msg) => {
     const userId = msg.from.id;
     const text = msg.text;
 
-    // Admin bypass - সবসময় অ্যাডমিনের মেসেজ অ্যাডমিন হ্যান্ডলার-এ যাবে
+    // Admin bypass
     if (userId.toString() === process.env.ADMIN_ID) {
         return messageHandler(bot, msg);
     }
