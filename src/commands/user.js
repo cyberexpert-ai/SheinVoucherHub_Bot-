@@ -186,16 +186,32 @@ async function handleScreenshot(bot, msg) {
         const utr = msg.text.trim().toUpperCase();
         const state = userState[userId];
         
+        // Check if it's actually a back command
+        if (utr === '← BACK' || utr === '← BACK TO MENU' || utr === 'BACK') {
+            delete userState[userId];
+            const { startCommand } = require('./start');
+            return startCommand(bot, msg);
+        }
+        
         // Validate UTR
         if (!/^[A-Z0-9]{6,30}$/.test(utr)) {
             return bot.sendMessage(chatId, '❌ Invalid UTR format! Please enter valid UTR.');
         }
         
+        // Check if UTR already used
+        if (db.isUTRUsed(utr)) {
+            db.addWarning(userId, 'Duplicate UTR');
+            return bot.sendMessage(chatId, '❌ This UTR has already been used! Fake payment detected.');
+        }
+        
+        // Mark UTR as used
+        db.addUsedUTR(utr);
+        
         // Update order with payment
         db.updateOrderPayment(state.orderId, utr, state.screenshot);
         
         // Add warning for suspicious UTR
-        if (utr.includes('FAKE') || utr.includes('TEST')) {
+        if (utr.includes('FAKE') || utr.includes('TEST') || utr.includes('DEMO')) {
             db.addWarning(userId, 'Suspicious UTR');
         }
         
@@ -399,7 +415,7 @@ async function handleRecovery(bot, msg) {
     const orderId = msg.text.trim();
     
     // Check if it's actually a back command
-    if (orderId === '← Back to Menu') {
+    if (orderId === '← Back to Menu' || orderId === '← Back' || orderId === 'Back') {
         delete userState[userId];
         const { startCommand } = require('./start');
         return startCommand(bot, msg);
