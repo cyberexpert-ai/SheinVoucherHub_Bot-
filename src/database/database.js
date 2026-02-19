@@ -8,64 +8,7 @@ function initDatabase() {
     if (!fs.existsSync(DATA_FILE)) {
         const defaultData = {
             users: [],
-            categories: [
-                { 
-                    id: "1", 
-                    name: "₹500 Shein Voucher", 
-                    basePrice: 500,
-                    prices: {
-                        1: 29,
-                        5: 29,
-                        10: 25,
-                        20: 25
-                    },
-                    stock: 100, 
-                    sold: 0, 
-                    status: "active" 
-                },
-                { 
-                    id: "2", 
-                    name: "₹1000 Shein Voucher", 
-                    basePrice: 1000,
-                    prices: {
-                        1: 55,
-                        5: 52,
-                        10: 48,
-                        20: 45
-                    },
-                    stock: 100, 
-                    sold: 0, 
-                    status: "active" 
-                },
-                { 
-                    id: "3", 
-                    name: "₹2000 Shein Voucher", 
-                    basePrice: 2000,
-                    prices: {
-                        1: 99,
-                        5: 95,
-                        10: 90,
-                        20: 85
-                    },
-                    stock: 100, 
-                    sold: 0, 
-                    status: "active" 
-                },
-                { 
-                    id: "4", 
-                    name: "₹4000 Shein Voucher", 
-                    basePrice: 4000,
-                    prices: {
-                        1: 180,
-                        5: 175,
-                        10: 165,
-                        20: 150
-                    },
-                    stock: 100, 
-                    sold: 0, 
-                    status: "active" 
-                }
-            ],
+            categories: [],
             vouchers: [],
             orders: [],
             blockedUsers: [],
@@ -74,7 +17,10 @@ function initDatabase() {
                 payment_qr: "https://i.supaimg.com/00332ad4-8aa7-408f-8705-55dbc91ea737.jpg",
                 recovery_hours: 2,
                 order_prefix: "SVH",
-                support_bot: "@SheinSupportRobot"
+                support_bot: "@SheinSupportRobot",
+                channel_1: "@SheinVoucherHub",
+                channel_2: "@OrdersNotify",
+                channel_2_id: "-1002862139182"
             },
             stats: {
                 totalUsers: 0,
@@ -226,16 +172,25 @@ function getCategory(categoryId) {
     return data.categories.find(c => c.id === categoryId);
 }
 
-function addCategory(name, basePrice, prices, stock = 100) {
+function addCategory(amount) {
     const data = loadData();
     const id = (data.categories.length + 1).toString();
+    const amountNum = parseInt(amount);
+    
+    // Default price tiers based on amount
+    const prices = {
+        1: Math.round(amountNum * 0.058),  // 5.8% for 1 code
+        5: Math.round(amountNum * 0.052),  // 5.2% for 5 codes
+        10: Math.round(amountNum * 0.048), // 4.8% for 10 codes
+        20: Math.round(amountNum * 0.045)  // 4.5% for 20+ codes
+    };
     
     data.categories.push({
         id: id,
-        name: `₹${name} Shein Voucher`,
-        basePrice: parseInt(basePrice),
+        name: `₹${amount} Shein Voucher`,
+        baseAmount: amountNum,
         prices: prices,
-        stock: parseInt(stock),
+        stock: 100,
         sold: 0,
         status: 'active',
         createdAt: new Date().toISOString()
@@ -243,29 +198,6 @@ function addCategory(name, basePrice, prices, stock = 100) {
     
     saveData(data);
     return id;
-}
-
-function updateCategory(categoryId, updates) {
-    const data = loadData();
-    const cat = data.categories.find(c => c.id === categoryId);
-    
-    if (cat) {
-        Object.assign(cat, updates);
-        saveData(data);
-        return true;
-    }
-    return false;
-}
-
-function deleteCategory(categoryId) {
-    const data = loadData();
-    data.categories = data.categories.filter(c => c.id !== categoryId);
-    saveData(data);
-    return true;
-}
-
-function updateCategoryStock(categoryId, newStock) {
-    return updateCategory(categoryId, { stock: parseInt(newStock) });
 }
 
 function updateCategoryPrice(categoryId, quantity, newPrice) {
@@ -280,21 +212,37 @@ function updateCategoryPrice(categoryId, quantity, newPrice) {
     return false;
 }
 
+function updateCategoryStock(categoryId, newStock) {
+    const data = loadData();
+    const cat = data.categories.find(c => c.id === categoryId);
+    
+    if (cat) {
+        cat.stock = parseInt(newStock);
+        saveData(data);
+        return true;
+    }
+    return false;
+}
+
+function deleteCategory(categoryId) {
+    const data = loadData();
+    data.categories = data.categories.filter(c => c.id !== categoryId);
+    saveData(data);
+    return true;
+}
+
 function getPriceForQuantity(categoryId, quantity) {
     const cat = getCategory(categoryId);
     if (!cat) return 0;
     
     const prices = cat.prices;
+    const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
     
     // Find best price for quantity
-    const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
-    let bestPrice = prices[1] || cat.basePrice;
-    
+    let bestPrice = prices[1] || Math.round(cat.baseAmount * 0.06);
     for (const q of quantities) {
         if (quantity >= q) {
             bestPrice = prices[q];
-        } else {
-            break;
         }
     }
     
@@ -324,7 +272,11 @@ function getAvailableVouchers(categoryId) {
     );
 }
 
-function addVoucher(code, categoryId, price) {
+function getAvailableVouchersCount(categoryId) {
+    return getAvailableVouchers(categoryId).length;
+}
+
+function addVoucher(code, categoryId) {
     const data = loadData();
     const id = `VCH-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
     
@@ -332,7 +284,6 @@ function addVoucher(code, categoryId, price) {
         id: id,
         code: code,
         categoryId: categoryId,
-        price: parseInt(price),
         status: 'available',
         createdAt: new Date().toISOString()
     });
@@ -341,10 +292,10 @@ function addVoucher(code, categoryId, price) {
     return id;
 }
 
-function bulkAddVouchers(categoryId, codes, price) {
+function bulkAddVouchers(categoryId, codes) {
     const added = [];
     for (const code of codes) {
-        const id = addVoucher(code, categoryId, price);
+        const id = addVoucher(code, categoryId);
         added.push(id);
     }
     return added;
@@ -399,6 +350,7 @@ function createOrder(userId, categoryId, quantity, totalPrice) {
     
     const orderId = `SVH-${year}${month}${day}-${random}`;
     const category = data.categories.find(c => c.id === categoryId);
+    const pricePerCode = getPriceForQuantity(categoryId, quantity);
     
     const recoveryExpiry = new Date();
     recoveryExpiry.setHours(recoveryExpiry.getHours() + 2);
@@ -408,7 +360,9 @@ function createOrder(userId, categoryId, quantity, totalPrice) {
         userId: userId,
         categoryId: categoryId,
         categoryName: category ? category.name : '',
+        baseAmount: category ? category.baseAmount : 0,
         quantity: parseInt(quantity),
+        pricePerCode: pricePerCode,
         totalPrice: parseInt(totalPrice),
         status: 'pending',
         paymentMethod: 'manual',
@@ -417,8 +371,7 @@ function createOrder(userId, categoryId, quantity, totalPrice) {
         createdAt: date.toISOString(),
         updatedAt: date.toISOString(),
         recoveryExpiry: recoveryExpiry.toISOString(),
-        deliveredAt: null,
-        pricePerCode: getPriceForQuantity(categoryId, quantity)
+        deliveredAt: null
     });
     
     data.stats.totalOrders = data.orders.length;
@@ -543,6 +496,11 @@ function toggleBotStatus() {
     return updateSetting('bot_status', current === 'active' ? 'inactive' : 'active');
 }
 
+function getChannel2Id() {
+    const data = loadData();
+    return data.settings.channel_2_id;
+}
+
 // ==================== STATS FUNCTIONS ====================
 
 function getDashboardStats() {
@@ -598,16 +556,16 @@ module.exports = {
     getCategories,
     getCategory,
     addCategory,
-    updateCategory,
-    deleteCategory,
-    updateCategoryStock,
     updateCategoryPrice,
+    updateCategoryStock,
+    deleteCategory,
     getPriceForQuantity,
     calculateTotalPrice,
     
     // Voucher
     getVouchers,
     getAvailableVouchers,
+    getAvailableVouchersCount,
     addVoucher,
     bulkAddVouchers,
     deleteVoucher,
@@ -630,6 +588,7 @@ module.exports = {
     updatePaymentQR,
     getBotStatus,
     toggleBotStatus,
+    getChannel2Id,
     
     // Stats
     getDashboardStats
