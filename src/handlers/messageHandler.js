@@ -63,8 +63,8 @@ async function messageHandler(bot, msg) {
         const qty = parseInt(text);
         const state = userState[userId];
         
-        if (isNaN(qty) || qty < 1 || qty > state.stock) {
-            return bot.sendMessage(chatId, `❌ Please enter a valid quantity (1-${state.stock}):`);
+        if (isNaN(qty) || qty < 1 || qty > state.availableVouchers) {
+            return bot.sendMessage(chatId, `❌ Please enter a valid quantity (1-${state.availableVouchers}):`);
         }
         
         delete userState[userId].step;
