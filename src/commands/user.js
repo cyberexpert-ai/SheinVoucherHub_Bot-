@@ -16,17 +16,17 @@ async function buyVouchers(bot, msg) {
         return bot.sendMessage(chatId, '❌ No categories available at the moment.');
     }
     
+    // Create keyboard exactly like the image
     const keyboard = {
         inline_keyboard: categories.map(cat => {
-            const name = cat.name.replace(' Voucher', '');
             return [{
-                text: `💰 ${name} - ₹${cat.price} (${cat.stock} left)`,
+                text: `${cat.name} (Stock: ${cat.stock})`,
                 callback_data: `select_cat_${cat.id}`
             }];
-        }).concat([[{ text: '🔙 Back', callback_data: 'back_to_main' }]])
+        }).concat([[{ text: '← Back', callback_data: 'back_to_main' }]])
     };
     
-    await bot.sendMessage(chatId, '🛒 **Select Voucher Category**', {
+    await bot.sendMessage(chatId, '**Choose Voucher Type From Below**', {
         parse_mode: 'Markdown',
         reply_markup: keyboard
     });
@@ -41,41 +41,52 @@ async function selectCategory(bot, chatId, userId, categoryId) {
         return bot.sendMessage(chatId, '❌ This category is out of stock!');
     }
     
-    const name = cat.name.replace(' Voucher', '');
+    const prices = cat.prices;
     
+    // Store category in user state
     userState[userId] = {
         categoryId: cat.id,
         categoryName: cat.name,
-        displayName: name,
-        price: cat.price,
-        maxStock: cat.stock,
+        stock: cat.stock,
+        prices: prices,
         step: 'selecting_quantity'
     };
     
+    // Create price display
+    let priceText = `**${cat.name}**\n`;
+    priceText += `Available stock: ${cat.stock} codes\n\n`;
+    priceText += `**Available Packages (per-code):**\n`;
+    
+    // Sort quantities
+    const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
+    
+    quantities.forEach(q => {
+        priceText += `- ${q} Code${q > 1 ? 's' : ''} → ₹${prices[q]}.00 / code\n`;
+    });
+    
+    priceText += `\n**Select quantity:**`;
+    
+    // Create quantity buttons
+    const qtyButtons = [];
+    quantities.forEach(q => {
+        qtyButtons.push([{
+            text: `${q} code${q > 1 ? 's' : ''}`,
+            callback_data: `qty_${q}`
+        }]);
+    });
+    
+    // Add Other amount and Back buttons
+    qtyButtons.push([{ text: 'Other amount', callback_data: 'qty_custom' }]);
+    qtyButtons.push([{ text: 'Back', callback_data: 'back_to_categories' }]);
+    
     const keyboard = {
-        inline_keyboard: [
-            [
-                { text: '1️⃣', callback_data: 'qty_1' },
-                { text: '2️⃣', callback_data: 'qty_2' },
-                { text: '3️⃣', callback_data: 'qty_3' }
-            ],
-            [
-                { text: '4️⃣', callback_data: 'qty_4' },
-                { text: '5️⃣', callback_data: 'qty_5' },
-                { text: '🔢 Custom', callback_data: 'qty_custom' }
-            ],
-            [{ text: '🔙 Back', callback_data: 'back_to_categories' }]
-        ]
+        inline_keyboard: qtyButtons
     };
     
-    await bot.sendMessage(chatId, 
-        `📦 **Selected:** ₹${name} Voucher
-💰 **Price per code:** ₹${cat.price}
-📊 **Available:** ${cat.stock}
-
-Select quantity:`,
-        { parse_mode: 'Markdown', reply_markup: keyboard }
-    );
+    await bot.sendMessage(chatId, priceText, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+    });
 }
 
 async function selectQuantity(bot, chatId, userId, quantity) {
@@ -91,11 +102,14 @@ async function selectQuantity(bot, chatId, userId, quantity) {
     const state = userState[userId];
     const qty = parseInt(quantity);
     
-    if (qty > state.maxStock) {
-        return bot.sendMessage(chatId, `❌ Only ${state.maxStock} codes available!`);
+    if (qty > state.stock) {
+        return bot.sendMessage(chatId, `❌ Only ${state.stock} codes available!`);
     }
     
-    const total = qty * state.price;
+    // Calculate total price
+    const pricePerCode = db.getPriceForQuantity(state.categoryId, qty);
+    const total = pricePerCode * qty;
+    
     const orderId = db.createOrder(userId, state.categoryId, qty, total);
     
     userState[userId] = {
@@ -103,13 +117,14 @@ async function selectQuantity(bot, chatId, userId, quantity) {
         orderId,
         quantity: qty,
         total,
+        pricePerCode,
         step: 'payment'
     };
     
-    await sendPaymentInstructions(bot, chatId, userId, state.displayName, qty, total, orderId);
+    await sendPaymentInstructions(bot, chatId, userId, state.categoryName, qty, total, pricePerCode, orderId);
 }
 
-async function sendPaymentInstructions(bot, chatId, userId, category, quantity, total, orderId) {
+async function sendPaymentInstructions(bot, chatId, userId, category, quantity, total, pricePerCode, orderId) {
     const paymentQR = db.getPaymentQR();
     
     const message = `💳 **Payment Instructions**
@@ -117,8 +132,9 @@ async function sendPaymentInstructions(bot, chatId, userId, category, quantity, 
 
 📋 **Order Summary**
 • Order ID: \`${orderId}\`
-• Category: ₹${category}
+• Category: ${category}
 • Quantity: ${quantity}
+• Price per code: ₹${pricePerCode}
 • Total: ₹${total}
 
 📱 **Payment Steps:**
@@ -226,7 +242,8 @@ async function notifyAdmin(bot, orderId, userId, utr, screenshot) {
 **User ID:** \`${userId}\`
 **Category:** ${order?.categoryName || 'N/A'}
 **Quantity:** ${order?.quantity || 0}
-**Amount:** ₹${order?.totalPrice || 0}
+**Price/Code:** ₹${order?.pricePerCode || 0}
+**Total:** ₹${order?.totalPrice || 0}
 **UTR:** \`${utr}\`
 
 **Action Required:** Verify payment`;
@@ -264,15 +281,18 @@ async function myOrders(bot, msg) {
         return bot.sendMessage(chatId, '📦 **You don\'t have any orders yet.**', {
             parse_mode: 'Markdown',
             reply_markup: {
-                keyboard: [['🔙 Back']],
+                keyboard: [['← Back']],
                 resize_keyboard: true
             }
         });
     }
     
+    // Sort orders by date (newest first)
+    const sortedOrders = orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    
     let text = '📦 **Your Orders**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
     
-    orders.slice().reverse().forEach(order => {
+    sortedOrders.forEach(order => {
         const statusEmoji = order.status === 'delivered' ? '✅' : 
                            order.status === 'pending_approval' ? '⏳' :
                            order.status === 'rejected' ? '❌' : '🔄';
@@ -282,10 +302,12 @@ async function myOrders(bot, msg) {
         text += `💰 ₹${order.totalPrice} | ${statusEmoji} ${order.status}\n\n`;
     });
     
+    text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nClick any order to view details`;
+    
     const keyboard = {
-        inline_keyboard: orders.slice(0, 5).map(order => [
+        inline_keyboard: sortedOrders.slice(0, 5).map(order => [
             { text: `📦 ${order.id}`, callback_data: `view_order_${order.id}` }
-        ]).concat([[{ text: '🔙 Back', callback_data: 'back_to_main' }]])
+        ]).concat([[{ text: '← Back', callback_data: 'back_to_main' }]])
     };
     
     await bot.sendMessage(chatId, text, {
@@ -307,13 +329,14 @@ async function viewOrder(bot, chatId, orderId) {
 **Date:** ${new Date(order.createdAt).toLocaleString()}
 **Category:** ${order.categoryName}
 **Quantity:** ${order.quantity}
+**Price per code:** ₹${order.pricePerCode || 'N/A'}
 **Total:** ₹${order.totalPrice}
 **Status:** `;
     
     if (order.status === 'delivered') {
         text += '✅ Delivered';
         
-        // Get vouchers
+        // Get vouchers for this order
         const vouchers = db.getVouchers(order.categoryId)
             .filter(v => v.orderId === orderId);
         
@@ -330,6 +353,8 @@ async function viewOrder(bot, chatId, orderId) {
         if (order.adminNote) {
             text += `\n**Reason:** ${order.adminNote}`;
         }
+    } else if (order.status === 'pending') {
+        text += '🔄 Awaiting Payment';
     } else {
         text += '🔄 Processing';
     }
@@ -338,7 +363,7 @@ async function viewOrder(bot, chatId, orderId) {
         parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [
-                [{ text: '🔙 Back to Orders', callback_data: 'back_to_orders' }]
+                [{ text: '← Back to Orders', callback_data: 'back_to_orders' }]
             ]
         }
     });
@@ -356,12 +381,13 @@ async function recoverVouchers(bot, msg) {
 Send your Order ID
 Example: \`SVH-20260219-ABC123\`
 
-⚠️ Recovery available within 2 hours of delivery`;
+⚠️ Recovery available within 2 hours of delivery
+✅ Only orders delivered to YOU can be recovered`;
 
     await bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
         reply_markup: {
-            keyboard: [['🔙 Back']],
+            keyboard: [['← Back to Menu']],
             resize_keyboard: true
         }
     });
@@ -374,18 +400,39 @@ async function handleRecovery(bot, msg) {
     const userId = msg.from.id;
     const orderId = msg.text.trim();
     
+    // Check if it's actually a back command
+    if (orderId === '← Back to Menu') {
+        delete userState[userId];
+        const { startCommand } = require('./start');
+        return startCommand(bot, msg);
+    }
+    
+    // Show processing message
+    await bot.sendMessage(chatId, `⏳ **Processing recovery request for Order** \`${orderId}\`...`, {
+        parse_mode: 'Markdown'
+    });
+    
     const recovery = db.canRecover(orderId, userId);
     
     if (!recovery.can) {
+        let errorMsg = '';
         if (recovery.reason === 'not_found') {
-            return bot.sendMessage(chatId, `⚠️ Order not found: ${orderId}`);
+            errorMsg = `⚠️ **Order not found:** \`${orderId}\``;
         } else if (recovery.reason === 'wrong_user') {
-            return bot.sendMessage(chatId, '❌ This order belongs to another user!');
+            errorMsg = '❌ **This order belongs to another user!**';
         } else if (recovery.reason === 'not_delivered') {
-            return bot.sendMessage(chatId, '❌ This order is not delivered yet!');
+            errorMsg = '❌ **This order is not delivered yet!**';
         } else if (recovery.reason === 'expired') {
-            return bot.sendMessage(chatId, '⏰ Recovery period expired (2 hours limit)');
+            errorMsg = '⏰ **Recovery period expired** (2 hours limit)';
         }
+        
+        return bot.sendMessage(chatId, errorMsg, {
+            parse_mode: 'Markdown',
+            reply_markup: {
+                keyboard: [['← Back to Menu']],
+                resize_keyboard: true
+            }
+        });
     }
     
     // Notify admin
@@ -401,6 +448,7 @@ async function handleRecovery(bot, msg) {
 **Category:** ${order.categoryName}
 **Quantity:** ${order.quantity}
 **Amount:** ₹${order.totalPrice}
+**Original Delivery:** ${new Date(order.deliveredAt || order.createdAt).toLocaleString()}
 
 **Action Required:** Process recovery`;
 
@@ -416,7 +464,14 @@ async function handleRecovery(bot, msg) {
         }
     });
     
-    await bot.sendMessage(chatId, '✅ Recovery request sent to admin. You will receive response soon.');
+    await bot.sendMessage(chatId, '✅ **Recovery request sent to admin.** You will receive response soon.', {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            keyboard: [['← Back to Menu']],
+            resize_keyboard: true
+        }
+    });
+    
     delete userState[userId];
 }
 
@@ -443,7 +498,7 @@ Thank you for using Shein Voucher Hub!`;
             inline_keyboard: [
                 [{ text: '📢 Contact Support', url: `https://t.me/${process.env.SUPPORT_BOT.replace('@', '')}` }]
             ],
-            keyboard: [['🔙 Back']],
+            keyboard: [['← Back to Menu']],
             resize_keyboard: true
         }
     });
@@ -468,7 +523,7 @@ async function disclaimer(bot, msg) {
     await bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
         reply_markup: {
-            keyboard: [['🔙 Back']],
+            keyboard: [['← Back to Menu']],
             resize_keyboard: true
         }
     });
