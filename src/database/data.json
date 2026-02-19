@@ -6,9 +6,10 @@
   "blockedUsers": [],
   "settings": {
     "bot_status": "active",
-    "payment_method": "manual",
-    "recovery_hours": "2",
-    "order_prefix": "SVH"
+    "payment_qr": "https://i.supaimg.com/00332ad4-8aa7-408f-8705-55dbc91ea737.jpg",
+    "recovery_hours": 2,
+    "order_prefix": "SVH",
+    "support_bot": "@SheinSupportRobot"
   },
   "stats": {
     "totalUsers": 0,
