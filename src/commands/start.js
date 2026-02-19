@@ -7,6 +7,12 @@ async function startCommand(bot, msg) {
     const username = msg.from.username;
     const firstName = msg.from.first_name;
     
+    // Exit admin mode if user is not admin
+    if (global.adminMode && global.adminChatId === chatId) {
+        global.adminMode = false;
+        global.adminChatId = null;
+    }
+    
     // Add user to database
     await addUser(userId, username, firstName);
     
@@ -18,10 +24,10 @@ async function startCommand(bot, msg) {
     }
     
     // Send welcome message and main menu
-    await sendWelcomeMessage(bot, chatId, firstName);
+    await sendMainMenu(bot, chatId, firstName);
 }
 
-async function sendWelcomeMessage(bot, chatId, firstName) {
+async function sendMainMenu(bot, chatId, firstName = '') {
     const welcomeMessage = `🎯 **Welcome to Shein Voucher Hub!** ${firstName ? firstName : ''}
 
 🚀 Get exclusive Shein vouchers at the best prices!
@@ -49,18 +55,4 @@ async function sendWelcomeMessage(bot, chatId, firstName) {
     });
 }
 
-async function sendMainMenu(bot, chatId) {
-    await bot.sendMessage(chatId, '📌 **Main Menu**', {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            keyboard: [
-                ['🛒 Buy Vouchers', '📦 My Orders'],
-                ['🔁 Recover Vouchers', '🆘 Support'],
-                ['📜 Disclaimer']
-            ],
-            resize_keyboard: true
-        }
-    });
-}
-
-module.exports = { startCommand, sendWelcomeMessage, sendMainMenu };
+module.exports = { startCommand, sendMainMenu };
