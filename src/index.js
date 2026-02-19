@@ -3,10 +3,8 @@ const TelegramBot = require('node-telegram-bot-api');
 const dotenv = require('dotenv');
 const bodyParser = require('body-parser');
 const cron = require('node-cron');
-const { setupGoogleSheets } = require('./sheets/googleSheets');
 const { messageHandler } = require('./handlers/messageHandler');
 const { callbackHandler } = require('./handlers/callbackHandler');
-const { paymentHandler } = require('./handlers/paymentHandler');
 
 dotenv.config();
 
@@ -24,22 +22,6 @@ global.bot = bot;
 // Admin Mode State
 global.adminMode = false;
 global.adminChatId = null;
-
-// Initialize Google Sheets
-setupGoogleSheets();
-
-// Scheduled Tasks
-cron.schedule('0 0 * * *', () => {
-    console.log('Running daily tasks...');
-});
-
-cron.schedule('0 0 * * 0', () => {
-    console.log('Running weekly tasks...');
-});
-
-cron.schedule('0 0 1 * *', () => {
-    console.log('Running monthly tasks...');
-});
 
 // ==================== Bot Message Handlers ====================
 
