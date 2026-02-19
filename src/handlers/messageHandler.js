@@ -1,5 +1,5 @@
 const { startCommand } = require('../commands/start');
-const { adminCommand, handleAdminCallback } = require('../commands/admin');
+const { adminCommand, handleAdminText, isAdminMode } = require('../commands/admin');
 const { 
     buyVouchers, myOrders, recoverVouchers, support, disclaimer 
 } = require('../commands/user');
@@ -15,19 +15,31 @@ async function messageHandler(bot, msg) {
     
     // ==================== ADMIN HANDLER ====================
     if (userId.toString() === process.env.ADMIN_ID) {
+        // Check if admin is in input mode
+        const { adminState } = require('../commands/admin');
+        
+        if (adminState[chatId]) {
+            const { handleAdminInput } = require('../commands/admin');
+            const handled = await handleAdminInput(bot, msg);
+            if (handled) return;
+        }
+        
         if (text === '/admin') {
             return adminCommand(bot, msg);
         }
         
-        // Handle admin text commands
         const { handleAdminText } = require('../commands/admin');
         const handled = await handleAdminText(bot, msg);
         if (handled) return;
+        
+        // Admin panel - silent ignore for any other text
+        console.log(`Admin typed: ${text} - ignored in admin mode`);
+        return;
     }
     
     // ==================== BOT STATUS CHECK ====================
     const botStatus = await getSetting('bot_status');
-    if (botStatus === 'inactive' && userId.toString() !== process.env.ADMIN_ID) {
+    if (botStatus === 'inactive') {
         return bot.sendMessage(chatId, '⚠️ Bot is under maintenance. Please try again later.');
     }
     
@@ -54,12 +66,11 @@ async function messageHandler(bot, msg) {
     
     // Handle recovery input
     if (userState[userId]?.action === 'recovery') {
-        // Process recovery (implement recovery logic)
         delete userState[userId];
         return bot.sendMessage(chatId, '🔁 Recovery request sent to admin.');
     }
     
-    // ==================== MAIN MENU COMMANDS ====================
+    // ==================== MAIN MENU COMMANDS (ONLY BUTTONS) ====================
     switch(text) {
         case '/start':
             return startCommand(bot, msg);
@@ -84,9 +95,28 @@ async function messageHandler(bot, msg) {
             return startCommand(bot, msg);
             
         default:
-            // Silent ignore - no error message
-            console.log(`User ${userId} typed: ${text} - ignored`);
-            return;
+            // ==================== USER SIDE - SHOW ERROR IF NOT USING BUTTONS ====================
+            return bot.sendMessage(chatId, 
+                '❌ **Invalid Command**\n\n' +
+                'Please use the buttons below to navigate:\n\n' +
+                '🛒 **Buy Vouchers** - Purchase new vouchers\n' +
+                '📦 **My Orders** - View your orders\n' +
+                '🔁 **Recover Vouchers** - Recover lost vouchers\n' +
+                '🆘 **Support** - Contact support\n' +
+                '📜 **Disclaimer** - Terms and conditions\n\n' +
+                '👉 **Click the buttons below to continue**',
+                { 
+                    parse_mode: 'Markdown',
+                    reply_markup: {
+                        keyboard: [
+                            ['🛒 Buy Vouchers', '📦 My Orders'],
+                            ['🔁 Recover Vouchers', '🆘 Support'],
+                            ['📜 Disclaimer']
+                        ],
+                        resize_keyboard: true
+                    }
+                }
+            );
     }
 }
 
