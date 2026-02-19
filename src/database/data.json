@@ -1,0 +1,18 @@
+{
+  "users": [],
+  "categories": [],
+  "vouchers": [],
+  "orders": [],
+  "blockedUsers": [],
+  "settings": {
+    "bot_status": "active",
+    "payment_method": "manual",
+    "recovery_hours": "2",
+    "order_prefix": "SVH"
+  },
+  "stats": {
+    "totalUsers": 0,
+    "totalOrders": 0,
+    "totalRevenue": 0
+  }
+}
