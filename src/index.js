@@ -5,8 +5,7 @@ const bodyParser = require('body-parser');
 const cron = require('node-cron');
 const { messageHandler } = require('./handlers/messageHandler');
 const { callbackHandler } = require('./handlers/callbackHandler');
-const { initDatabase } = require('./database/database');
-const { logError } = require('./utils/helpers');
+const { initDatabase, cleanupExpiredOrders } = require('./database/database');
 
 dotenv.config();
 
@@ -26,19 +25,20 @@ global.adminChatId = null;
 // Initialize database
 initDatabase();
 
-// Scheduled tasks
-cron.schedule('0 0 * * *', () => {
-    console.log('Running daily cleanup tasks...');
-    // Implement cleanup logic
+// Scheduled tasks - প্রতি ৬ ঘন্টা পর পুরনো অর্ডার ক্লিনআপ
+cron.schedule('0 */6 * * *', () => {
+    console.log('Running cleanup tasks...');
+    const cleaned = cleanupExpiredOrders();
+    console.log(`Cleaned ${cleaned} expired orders`);
 });
 
 // Error handling
 process.on('uncaughtException', (error) => {
-    logError(error, 'uncaughtException');
+    console.error('Uncaught Exception:', error);
 });
 
 process.on('unhandledRejection', (error) => {
-    logError(error, 'unhandledRejection');
+    console.error('Unhandled Rejection:', error);
 });
 
 // ==================== Bot Message Handlers ====================
@@ -57,7 +57,8 @@ bot.on('message', async (msg) => {
         // Check if blocked
         const { checkBlocked } = require('./middlewares/auth');
         if (checkBlocked(userId)) {
-            const blocked = require('./database/database').getBlockedUsers().find(b => b.id === userId);
+            const { getBlockedUsers } = require('./database/database');
+            const blocked = getBlockedUsers().find(b => b.id === userId);
             let msgText = '⛔ **You are blocked!**\n';
             
             if (blocked?.expiresAt) {
@@ -81,7 +82,7 @@ bot.on('message', async (msg) => {
 
         messageHandler(bot, msg);
     } catch (error) {
-        logError(error, 'messageHandler');
+        console.error('Error in message handler:', error);
     }
 });
 
@@ -96,7 +97,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
         callbackHandler(bot, callbackQuery);
     } catch (error) {
-        logError(error, 'callbackHandler');
+        console.error('Error in callback handler:', error);
     }
 });
 
