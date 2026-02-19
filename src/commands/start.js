@@ -1,6 +1,5 @@
 const { addUser, getUser } = require('../sheets/googleSheets');
 const { channelCheckMiddleware } = require('../middlewares/channelCheck');
-const keyboards = require('../keyboards/keyboards');
 
 async function startCommand(bot, msg) {
     const chatId = msg.chat.id;
@@ -27,26 +26,41 @@ async function sendWelcomeMessage(bot, chatId, firstName) {
 
 🚀 Get exclusive Shein vouchers at the best prices!
 
-📌 **Features:**
-• 🛒 Buy Vouchers - Multiple categories available
-• 📦 My Orders - Track your purchases
-• 🔁 Recover Vouchers - Get lost vouchers back
-• 🆘 Support - 24/7 customer support
-• 📜 Disclaimer - Terms and conditions
+📌 **How to use:**
+1️⃣ Click on 'Buy Vouchers'
+2️⃣ Select a category
+3️⃣ Choose quantity
+4️⃣ Make payment via QR code
+5️⃣ Upload screenshot and UTR
+6️⃣ Get vouchers after admin approval
 
-✨ **How to use:**
-1️⃣ Select a category
-2️⃣ Choose quantity
-3️⃣ Make payment via QR code
-4️⃣ Upload screenshot and UTR
-5️⃣ Get vouchers instantly after admin approval
-
-👇 **Choose an option below:**`;
+👇 **Click the buttons below:**`;
 
     await bot.sendMessage(chatId, welcomeMessage, {
         parse_mode: 'Markdown',
-        reply_markup: keyboards.mainMenu
+        reply_markup: {
+            keyboard: [
+                ['🛒 Buy Vouchers', '📦 My Orders'],
+                ['🔁 Recover Vouchers', '🆘 Support'],
+                ['📜 Disclaimer']
+            ],
+            resize_keyboard: true
+        }
     });
 }
 
-module.exports = { startCommand, sendWelcomeMessage };
+async function sendMainMenu(bot, chatId) {
+    await bot.sendMessage(chatId, '📌 **Main Menu**', {
+        parse_mode: 'Markdown',
+        reply_markup: {
+            keyboard: [
+                ['🛒 Buy Vouchers', '📦 My Orders'],
+                ['🔁 Recover Vouchers', '🆘 Support'],
+                ['📜 Disclaimer']
+            ],
+            resize_keyboard: true
+        }
+    });
+}
+
+module.exports = { startCommand, sendWelcomeMessage, sendMainMenu };
