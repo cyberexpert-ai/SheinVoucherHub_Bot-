@@ -11,6 +11,7 @@ function initDatabase() {
             categories: [],
             vouchers: [],
             orders: [],
+            usedUTRs: [], // নতুন - ব্যবহৃত UTR ট্র্যাক করার জন্য
             blockedUsers: [],
             settings: {
                 bot_status: "active",
@@ -190,7 +191,7 @@ function addCategory(amount) {
         name: `₹${amount} Shein Voucher`,
         baseAmount: amountNum,
         prices: prices,
-        stock: 100,
+        stock: 0, // স্টক ০ থেকে শুরু হবে, ভাউচার অ্যাড করলে বাড়বে
         sold: 0,
         status: 'active',
         createdAt: new Date().toISOString()
@@ -212,16 +213,16 @@ function updateCategoryPrice(categoryId, quantity, newPrice) {
     return false;
 }
 
-function updateCategoryStock(categoryId, newStock) {
+function updateCategoryStock(categoryId, change) {
     const data = loadData();
     const cat = data.categories.find(c => c.id === categoryId);
     
     if (cat) {
-        cat.stock = parseInt(newStock);
+        cat.stock = Math.max(0, cat.stock + change);
         saveData(data);
-        return true;
+        return cat.stock;
     }
-    return false;
+    return 0;
 }
 
 function deleteCategory(categoryId) {
@@ -288,6 +289,9 @@ function addVoucher(code, categoryId) {
         createdAt: new Date().toISOString()
     });
     
+    // ক্যাটাগরির স্টক বাড়ান
+    updateCategoryStock(categoryId, 1);
+    
     saveData(data);
     return id;
 }
@@ -303,6 +307,13 @@ function bulkAddVouchers(categoryId, codes) {
 
 function deleteVoucher(voucherId) {
     const data = loadData();
+    const voucher = data.vouchers.find(v => v.id === voucherId);
+    
+    if (voucher && voucher.status === 'available') {
+        // ক্যাটাগরির স্টক কমান
+        updateCategoryStock(voucher.categoryId, -1);
+    }
+    
     data.vouchers = data.vouchers.filter(v => v.id !== voucherId);
     saveData(data);
     return true;
@@ -310,6 +321,14 @@ function deleteVoucher(voucherId) {
 
 function deleteVouchersByCategory(categoryId) {
     const data = loadData();
+    const availableVouchers = data.vouchers.filter(v => v.categoryId === categoryId && v.status === 'available');
+    
+    // ক্যাটাগরির স্টক আপডেট
+    const cat = data.categories.find(c => c.id === categoryId);
+    if (cat) {
+        cat.stock = Math.max(0, cat.stock - availableVouchers.length);
+    }
+    
     data.vouchers = data.vouchers.filter(v => v.categoryId !== categoryId);
     saveData(data);
     return true;
@@ -325,13 +344,30 @@ function assignVoucher(voucherId, buyerId, orderId) {
         voucher.orderId = orderId;
         voucher.soldAt = new Date().toISOString();
         
-        // Update category sold count
+        // Update category sold count and stock
         const cat = data.categories.find(c => c.id === voucher.categoryId);
         if (cat) {
             cat.sold = (cat.sold || 0) + 1;
             cat.stock = Math.max(0, cat.stock - 1);
         }
         
+        saveData(data);
+        return true;
+    }
+    return false;
+}
+
+// ==================== UTR FUNCTIONS (নতুন) ====================
+
+function isUTRUsed(utr) {
+    const data = loadData();
+    return data.usedUTRs.includes(utr);
+}
+
+function addUsedUTR(utr) {
+    const data = loadData();
+    if (!data.usedUTRs.includes(utr)) {
+        data.usedUTRs.push(utr);
         saveData(data);
         return true;
     }
@@ -538,6 +574,31 @@ function getDashboardStats() {
     };
 }
 
+// ==================== CLEANUP FUNCTION ====================
+
+function cleanupExpiredOrders() {
+    const data = loadData();
+    const now = new Date();
+    let cleaned = 0;
+    
+    data.orders = data.orders.filter(order => {
+        // রাখবে যদি order delivered বা rejected হয়, অথবা ৭ দিনের কম পুরনো হয়
+        const keep = order.status === 'delivered' || 
+                    order.status === 'rejected' ||
+                    (new Date(order.createdAt) > new Date(now - 7 * 24 * 60 * 60 * 1000));
+        
+        if (!keep) cleaned++;
+        return keep;
+    });
+    
+    if (cleaned > 0) {
+        data.stats.totalOrders = data.orders.length;
+        saveData(data);
+    }
+    
+    return cleaned;
+}
+
 // ==================== EXPORT ====================
 
 module.exports = {
@@ -572,6 +633,10 @@ module.exports = {
     deleteVouchersByCategory,
     assignVoucher,
     
+    // UTR
+    isUTRUsed,
+    addUsedUTR,
+    
     // Order
     createOrder,
     getOrder,
@@ -591,5 +656,8 @@ module.exports = {
     getChannel2Id,
     
     // Stats
-    getDashboardStats
+    getDashboardStats,
+    
+    // Cleanup
+    cleanupExpiredOrders
 };
