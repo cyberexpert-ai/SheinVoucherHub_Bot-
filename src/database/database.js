@@ -8,16 +8,73 @@ function initDatabase() {
     if (!fs.existsSync(DATA_FILE)) {
         const defaultData = {
             users: [],
-            categories: [],
+            categories: [
+                { 
+                    id: "1", 
+                    name: "₹500 Shein Voucher", 
+                    basePrice: 500,
+                    prices: {
+                        1: 29,
+                        5: 29,
+                        10: 25,
+                        20: 25
+                    },
+                    stock: 100, 
+                    sold: 0, 
+                    status: "active" 
+                },
+                { 
+                    id: "2", 
+                    name: "₹1000 Shein Voucher", 
+                    basePrice: 1000,
+                    prices: {
+                        1: 55,
+                        5: 52,
+                        10: 48,
+                        20: 45
+                    },
+                    stock: 100, 
+                    sold: 0, 
+                    status: "active" 
+                },
+                { 
+                    id: "3", 
+                    name: "₹2000 Shein Voucher", 
+                    basePrice: 2000,
+                    prices: {
+                        1: 99,
+                        5: 95,
+                        10: 90,
+                        20: 85
+                    },
+                    stock: 100, 
+                    sold: 0, 
+                    status: "active" 
+                },
+                { 
+                    id: "4", 
+                    name: "₹4000 Shein Voucher", 
+                    basePrice: 4000,
+                    prices: {
+                        1: 180,
+                        5: 175,
+                        10: 165,
+                        20: 150
+                    },
+                    stock: 100, 
+                    sold: 0, 
+                    status: "active" 
+                }
+            ],
             vouchers: [],
             orders: [],
             blockedUsers: [],
             settings: {
-                bot_status: 'active',
-                payment_qr: 'https://i.supaimg.com/00332ad4-8aa7-408f-8705-55dbc91ea737.jpg',
+                bot_status: "active",
+                payment_qr: "https://i.supaimg.com/00332ad4-8aa7-408f-8705-55dbc91ea737.jpg",
                 recovery_hours: 2,
-                order_prefix: 'SVH',
-                support_bot: '@SheinSupportRobot'
+                order_prefix: "SVH",
+                support_bot: "@SheinSupportRobot"
             },
             stats: {
                 totalUsers: 0,
@@ -169,14 +226,15 @@ function getCategory(categoryId) {
     return data.categories.find(c => c.id === categoryId);
 }
 
-function addCategory(name, price, stock = 100) {
+function addCategory(name, basePrice, prices, stock = 100) {
     const data = loadData();
-    const id = data.categories.length + 1;
+    const id = (data.categories.length + 1).toString();
     
     data.categories.push({
-        id: id.toString(),
-        name: `₹${name} Voucher`,
-        price: parseInt(price),
+        id: id,
+        name: `₹${name} Shein Voucher`,
+        basePrice: parseInt(basePrice),
+        prices: prices,
         stock: parseInt(stock),
         sold: 0,
         status: 'active',
@@ -184,7 +242,7 @@ function addCategory(name, price, stock = 100) {
     });
     
     saveData(data);
-    return id.toString();
+    return id;
 }
 
 function updateCategory(categoryId, updates) {
@@ -210,8 +268,42 @@ function updateCategoryStock(categoryId, newStock) {
     return updateCategory(categoryId, { stock: parseInt(newStock) });
 }
 
-function updateCategoryPrice(categoryId, newPrice) {
-    return updateCategory(categoryId, { price: parseInt(newPrice) });
+function updateCategoryPrice(categoryId, quantity, newPrice) {
+    const data = loadData();
+    const cat = data.categories.find(c => c.id === categoryId);
+    
+    if (cat) {
+        cat.prices[quantity.toString()] = parseInt(newPrice);
+        saveData(data);
+        return true;
+    }
+    return false;
+}
+
+function getPriceForQuantity(categoryId, quantity) {
+    const cat = getCategory(categoryId);
+    if (!cat) return 0;
+    
+    const prices = cat.prices;
+    
+    // Find best price for quantity
+    const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
+    let bestPrice = prices[1] || cat.basePrice;
+    
+    for (const q of quantities) {
+        if (quantity >= q) {
+            bestPrice = prices[q];
+        } else {
+            break;
+        }
+    }
+    
+    return bestPrice;
+}
+
+function calculateTotalPrice(categoryId, quantity) {
+    const pricePerCode = getPriceForQuantity(categoryId, quantity);
+    return pricePerCode * quantity;
 }
 
 // ==================== VOUCHER FUNCTIONS ====================
@@ -325,7 +417,8 @@ function createOrder(userId, categoryId, quantity, totalPrice) {
         createdAt: date.toISOString(),
         updatedAt: date.toISOString(),
         recoveryExpiry: recoveryExpiry.toISOString(),
-        deliveredAt: null
+        deliveredAt: null,
+        pricePerCode: getPriceForQuantity(categoryId, quantity)
     });
     
     data.stats.totalOrders = data.orders.length;
@@ -509,6 +602,8 @@ module.exports = {
     deleteCategory,
     updateCategoryStock,
     updateCategoryPrice,
+    getPriceForQuantity,
+    calculateTotalPrice,
     
     // Voucher
     getVouchers,
