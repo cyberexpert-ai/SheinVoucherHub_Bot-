@@ -1,5 +1,6 @@
 const db = require('../database/database');
-const { channelCheckMiddleware } = require('../middlewares/channelCheck');
+const { checkChannels, sendJoinMessage } = require('../middlewares/channelCheck');
+const { deletePreviousMessage } = require('../utils/helpers');
 
 async function startCommand(bot, msg) {
     const chatId = msg.chat.id;
@@ -7,33 +8,31 @@ async function startCommand(bot, msg) {
     const username = msg.from.username;
     const firstName = msg.from.first_name;
     
-    // অ্যাডমিন মোড চেক
-    const { isAdminMode, exitAdminMode } = require('./admin');
-    if (isAdminMode(chatId)) {
-        exitAdminMode();
-    }
+    // Delete previous messages
+    await deletePreviousMessage(bot, chatId, userId);
     
-    // ইউজার অ্যাড
+    // Add user to database
     db.addUser(userId, username, firstName);
     
-    // চ্যানেল চেক
-    const isMember = await channelCheckMiddleware.checkChannels(bot, userId);
+    // Check channel membership
+    const isMember = await checkChannels(bot, userId);
+    
     if (!isMember) {
-        return channelCheckMiddleware.sendJoinMessage(bot, chatId);
+        return sendJoinMessage(bot, chatId);
     }
     
-    // মেনু দেখাও
+    // Send main menu
     await sendMainMenu(bot, chatId, firstName);
 }
 
 async function sendMainMenu(bot, chatId, firstName = '') {
-    const welcome = `🎯 **Welcome ${firstName}!**
+    const welcomeMessage = `🎯 **Welcome to Shein Voucher Hub** ${firstName ? firstName : ''}!
 
-🚀 Get Shein vouchers at best prices!
+🚀 Get exclusive Shein vouchers at the best prices!
 
-👇 Choose option:`;
+📌 **Choose an option below:**`;
 
-    await bot.sendMessage(chatId, welcome, {
+    await bot.sendMessage(chatId, welcomeMessage, {
         parse_mode: 'Markdown',
         reply_markup: {
             keyboard: [
