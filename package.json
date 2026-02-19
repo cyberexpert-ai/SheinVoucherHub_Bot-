@@ -1,7 +1,7 @@
 {
   "name": "shein-voucher-hub-bot",
   "version": "10.0.0",
-  "description": "Complete Shein Voucher Bot with 2000+ features",
+  "description": "Complete Shein Voucher Bot with Price Tiers",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
