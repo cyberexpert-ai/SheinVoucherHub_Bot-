@@ -2,27 +2,9 @@ const {
     getCategories, addCategory, updateCategoryStock, deleteCategory,
     addVoucher, blockUser, unblockUser, getAllUsers,
     getSetting, updateSetting, getUserOrders, getOrder, getAllOrders,
-    getStats, getBlockedUsers, getVouchersByCategory, deleteVoucher,
+    getBlockedUsers, getVouchersByCategory, deleteVoucher,
     updateVoucherPrice, getDailyStats, backupData,
-    sendBroadcast, sendPersonalMessage,
-    setUserRestriction,
-    addCategoryDiscount,
-    setPaymentMethod, getPaymentMethod, setCaptchaType, getCaptchaType,
-    setRecoveryHours, getRecoveryHours, setMaxQuantity, getMaxQuantity,
-    setBotStatus, getBotStatus, setMaintenanceMode, getMaintenanceMode,
-    setWelcomeMessage, getWelcomeMessage, setDisclaimer, getDisclaimer,
-    setSupportMessage, getSupportMessage,
-    setCaptchaEnabled, getCaptchaEnabled,
-    setChannelCheck, getChannelCheck,
-    setChannelLinks, getChannelLinks,
-    setLanguage, getLanguage, setTimezone, getTimezone,
-    setCurrency, getCurrency,
-    setTaxEnabled, getTaxEnabled, setTaxRate, getTaxRate,
-    setReferralEnabled, getReferralEnabled,
-    setReferralBonus, getReferralBonus,
-    setReferralTier, getReferralTier,
-    setBackupEnabled, getBackupEnabled,
-    setBackupInterval, getBackupInterval
+    sendBroadcast
 } = require('../sheets/googleSheets');
 
 // Admin state store for input modes
@@ -43,15 +25,6 @@ function isAdminMode(chatId) {
     return global.adminMode && global.adminChatId === chatId;
 }
 
-// Helper function to get last backup
-async function getLastBackup() {
-    try {
-        return await getSetting('last_backup') || 'Never';
-    } catch (error) {
-        return 'Never';
-    }
-}
-
 async function adminCommand(bot, msg) {
     const chatId = msg.chat.id;
     
@@ -61,26 +34,19 @@ async function adminCommand(bot, msg) {
     const adminMenu = `👑 **Admin Panel v7.0**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-📊 **Dashboard & Analytics**
+📊 **Dashboard**
 👥 **User Management**
 📁 **Category Management**
 🎫 **Voucher Management**
 📋 **Order Management**
 💰 **Payment Management**
-🏷️ **Discounts & Coupons**
-🤝 **Referral System**
-📈 **Reports & Analytics**
-⚙️ **Settings & Configuration**
-🔄 **Backup & Restore**
-🔐 **Security Management**
-📢 **Broadcast & Notifications**
-🔌 **Integrations**
-🛠️ **System Management**
+⚙️ **Settings**
+🔄 **Backup**
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔒 **Admin Mode Active** - All actions are logged
+🔒 **Admin Mode Active** - Click 'Exit Admin' to return to user side
 
-👇 **Select an option below:**`;
+👇 **Select an option:**`;
 
     await bot.sendMessage(chatId, adminMenu, {
         parse_mode: 'Markdown',
@@ -88,10 +54,7 @@ async function adminCommand(bot, msg) {
             keyboard: [
                 ['📊 Dashboard', '👥 Users', '📁 Categories'],
                 ['🎫 Vouchers', '📋 Orders', '💰 Payments'],
-                ['🏷️ Discounts', '🎟️ Coupons', '🤝 Referrals'],
-                ['📈 Reports', '⚙️ Settings', '🔄 Backup'],
-                ['🔐 Security', '📢 Broadcast', '🔌 Integrations'],
-                ['🛠️ System', '❓ Help', '🔙 Exit Admin']
+                ['⚙️ Settings', '🔄 Backup', '🔙 Exit Admin']
             ],
             resize_keyboard: true
         }
@@ -103,15 +66,15 @@ async function handleAdminText(bot, msg) {
     const chatId = msg.chat.id;
     const text = msg.text;
     
+    // Check if in admin mode
+    if (!isAdminMode(chatId)) {
+        return false;
+    }
+    
     // Check if admin is in input mode
     if (adminState[chatId]) {
         const handled = await handleAdminInput(bot, msg);
         if (handled) return true;
-    }
-    
-    // Check if in admin mode
-    if (!isAdminMode(chatId)) {
-        return false;
     }
     
     // Admin menu buttons
@@ -140,23 +103,6 @@ async function handleAdminText(bot, msg) {
             await showPaymentManagement(bot, chatId);
             return true;
             
-        case '🏷️ Discounts':
-            await showDiscountManagement(bot, chatId);
-            return true;
-            
-        case '🎟️ Coupons':
-            await showCouponManagement(bot, chatId);
-            return true;
-            
-        case '🤝 Referrals':
-            await showReferralManagement(bot, chatId);
-            return true;
-            
-        case '📈 Reports':
-        case '📊 Reports':
-            await showAnalytics(bot, chatId);
-            return true;
-            
         case '⚙️ Settings':
             await showSettings(bot, chatId);
             return true;
@@ -165,36 +111,15 @@ async function handleAdminText(bot, msg) {
             await showBackupManagement(bot, chatId);
             return true;
             
-        case '🔐 Security':
-            await showSecurityManagement(bot, chatId);
-            return true;
-            
-        case '📢 Broadcast':
-            await showBroadcastManagement(bot, chatId);
-            return true;
-            
-        case '🔌 Integrations':
-            await showIntegrationManagement(bot, chatId);
-            return true;
-            
-        case '🛠️ System':
-            await showSystemManagement(bot, chatId);
-            return true;
-            
-        case '❓ Help':
-            await showHelp(bot, chatId);
-            return true;
-            
         case '🔙 Exit Admin':
-            // Exit admin mode and go back to user side
             exitAdminMode();
             const { startCommand } = require('./start');
             await startCommand(bot, msg);
             return true;
             
         default:
-            // ✅ ERROR COMPLETELY DELETED - Admin panel-এ কিছু দেখানো হবে না
-            console.log(`Admin typed: ${text} - silently ignored in admin mode`);
+            // ❌ No error message - silent ignore
+            console.log(`Admin typed: ${text} - ignored`);
             return true;
     }
 }
@@ -211,7 +136,7 @@ async function handleAdminInput(bot, msg) {
         switch(state.action) {
             case 'add_category':
                 if (!/^\d+$/.test(text)) {
-                    await bot.sendMessage(chatId, '❌ Please send only numbers!\nExample: 500 for ₹500 voucher');
+                    await bot.sendMessage(chatId, '❌ Please send only numbers!\nExample: 500');
                     return true;
                 }
                 
@@ -219,17 +144,11 @@ async function handleAdminInput(bot, msg) {
                 await addCategory(categoryName, categoryName, '100');
                 
                 await bot.sendMessage(chatId, 
-                    `✅ **Category Added!**
-━━━━━━━━━━━━━━━━━━━━━
-
-📌 **Category:** ₹${categoryName} Voucher
-💰 **Price:** ₹${categoryName}
-📦 **Stock:** 100`,
+                    `✅ **Category Added!**\n📌 ₹${categoryName} Voucher`,
                     { parse_mode: 'Markdown' }
                 );
                 
                 delete adminState[chatId];
-                await adminCommand(bot, msg);
                 return true;
                 
             case 'add_voucher':
@@ -246,38 +165,34 @@ async function handleAdminInput(bot, msg) {
                 
                 await bot.sendMessage(chatId, `✅ ${codes.length} vouchers added!`);
                 delete adminState[chatId];
-                await adminCommand(bot, msg);
                 return true;
                 
             case 'block_user':
                 if (!/^\d+$/.test(text)) {
-                    await bot.sendMessage(chatId, '❌ Please send a valid User ID (numbers only).');
+                    await bot.sendMessage(chatId, '❌ Please send a valid User ID.');
                     return true;
                 }
                 
                 await blockUser(text, 'Blocked by admin', process.env.ADMIN_ID, 'permanent');
                 await bot.sendMessage(chatId, `✅ User ${text} blocked!`);
                 delete adminState[chatId];
-                await adminCommand(bot, msg);
                 return true;
                 
             case 'unblock_user':
                 if (!/^\d+$/.test(text)) {
-                    await bot.sendMessage(chatId, '❌ Please send a valid User ID (numbers only).');
+                    await bot.sendMessage(chatId, '❌ Please send a valid User ID.');
                     return true;
                 }
                 
                 await unblockUser(text);
                 await bot.sendMessage(chatId, `✅ User ${text} unblocked!`);
                 delete adminState[chatId];
-                await adminCommand(bot, msg);
                 return true;
                 
             case 'broadcast':
                 await sendBroadcast(text);
-                await bot.sendMessage(chatId, '📢 Broadcast sent to all users!');
+                await bot.sendMessage(chatId, '📢 Broadcast sent!');
                 delete adminState[chatId];
-                await adminCommand(bot, msg);
                 return true;
                 
             default:
@@ -286,7 +201,6 @@ async function handleAdminInput(bot, msg) {
     } catch (error) {
         await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
         delete adminState[chatId];
-        await adminCommand(bot, msg);
         return true;
     }
 }
@@ -323,32 +237,16 @@ async function showDashboard(bot, chatId) {
             })
             .reduce((sum, o) => sum + (parseInt(o.total_price) || 0), 0);
         
-        const dashboard = `📊 **Live Dashboard**
+        const dashboard = `📊 **Dashboard**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-👥 **USER STATISTICS**
-• Total Users: ${totalUsers}
-• Active Users: ${activeUsers}
-• Blocked Users: ${blockedUsers}
-• Categories: ${categories.length}
+👥 **Users:** ${totalUsers} (Active: ${activeUsers}, Blocked: ${blockedUsers})
+📦 **Orders:** ${totalOrders} (Pending: ${pendingOrders}, Completed: ${completedOrders})
+💰 **Revenue Today:** ₹${todayRevenue}
+💰 **Total Revenue:** ₹${totalRevenue}
+📁 **Categories:** ${categories.length}
 
-💰 **REVENUE STATISTICS**
-• Today: ₹${todayRevenue}
-• Total Revenue: ₹${totalRevenue}
-• Avg Order: ${totalOrders ? Math.round(totalRevenue / totalOrders) : 0}
-
-📦 **ORDER STATISTICS**
-• Today: ${todayOrders}
-• Pending: ${pendingOrders}
-• Completed: ${completedOrders}
-• Total Orders: ${totalOrders}
-
-⏱️ **SYSTEM STATISTICS**
-• Uptime: ${formatUptime(process.uptime())}
-• Memory: ${(process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2)} MB
-• Admin Mode: ✅ Active
-
-🕒 **Last Updated:** ${new Date().toLocaleString('en-IN')}`;
+🕒 **Updated:** ${new Date().toLocaleString('en-IN')}`;
 
         await bot.sendMessage(chatId, dashboard, {
             parse_mode: 'Markdown'
@@ -375,24 +273,23 @@ async function showUserManagement(bot, chatId) {
         
         const recentUsers = users
             .sort((a, b) => new Date(b.join_date) - new Date(a.join_date))
-            .slice(0, 5)
-            .map(u => ({
-                name: u.first_name,
-                username: u.username,
-                date: new Date(u.join_date).toLocaleDateString()
-            }));
+            .slice(0, 3)
+            .map(u => `• ${u.first_name} (@${u.username || 'N/A'})`);
         
         let message = `👥 **User Management**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📊 **Statistics**
-• Total Users: ${totalUsers}
-• Active Users: ${activeUsers}
-• Blocked Users: ${blockedUsers}
-• Today's Join: ${todayJoin}
+• Total: ${totalUsers}
+• Active: ${activeUsers}
+• Blocked: ${blockedUsers}
+• Joined Today: ${todayJoin}
 
 📋 **Recent Users**
-${recentUsers.map((u, i) => `${i+1}. ${u.name} (@${u.username || 'N/A'}) - ${u.date}`).join('\n')}`;
+${recentUsers.join('\n')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Commands: /block [id], /unblock [id]`;
 
         await bot.sendMessage(chatId, message, {
             parse_mode: 'Markdown'
@@ -408,14 +305,28 @@ async function showCategoryManagement(bot, chatId) {
         const categories = await getCategories();
         
         let message = `📁 **Category Management**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📊 **Current Categories**
-${categories.map((c, i) => `${i+1}. ${c.name} - ₹${c.price_per_code} | Stock: ${c.stock} | Sold: ${c.total_sold}`).join('\n') || 'No categories found'}`;
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        
+        if (categories.length === 0) {
+            message += 'No categories found.\n\nUse "➕ Add Category" to add.';
+        } else {
+            categories.forEach((c, i) => {
+                const match = c.name.match(/₹(\d+)/);
+                const displayName = match ? match[1] : c.name;
+                message += `${i+1}. ₹${displayName} - ₹${c.price_per_code} | Stock: ${c.stock}\n`;
+            });
+        }
+        
+        message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+To add: Send category amount (e.g., 500)`;
 
         await bot.sendMessage(chatId, message, {
             parse_mode: 'Markdown'
         });
+        
+        // Set state for adding category
+        adminState[chatId] = { action: 'add_category' };
+        
     } catch (error) {
         console.error('Category management error:', error);
     }
@@ -434,11 +345,53 @@ async function showVoucherManagement(bot, chatId) {
 📊 **Statistics**
 • Total: ${vouchers.length}
 • Available: ${available}
-• Sold: ${sold}`;
+• Sold: ${sold}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+To add: Send voucher codes (one per line)`;
 
         await bot.sendMessage(chatId, message, {
             parse_mode: 'Markdown'
         });
+        
+        // Ask for category first
+        const categories = await getCategories();
+        if (categories.length === 0) {
+            await bot.sendMessage(chatId, '❌ Please add a category first!');
+            return;
+        }
+        
+        let catMsg = 'Select category ID:\n';
+        categories.forEach(cat => {
+            const match = cat.name.match(/₹(\d+)/);
+            const displayName = match ? match[1] : cat.name;
+            catMsg += `ID ${cat.category_id}: ₹${displayName}\n`;
+        });
+        
+        await bot.sendMessage(chatId, catMsg);
+        
+        // Set up category selection
+        const response = await new Promise(resolve => {
+            const handler = (msg) => {
+                if (msg.chat.id === chatId) {
+                    bot.removeListener('message', handler);
+                    resolve(msg.text);
+                }
+            };
+            bot.on('message', handler);
+        });
+        
+        const categoryId = response;
+        const category = categories.find(c => c.category_id === categoryId);
+        
+        if (!category) {
+            await bot.sendMessage(chatId, '❌ Invalid category ID');
+            return;
+        }
+        
+        adminState[chatId] = { action: 'add_voucher', categoryId };
+        await bot.sendMessage(chatId, '📝 Send voucher codes (one per line):');
+        
     } catch (error) {
         console.error('Voucher management error:', error);
     }
@@ -448,7 +401,8 @@ async function showVoucherManagement(bot, chatId) {
 async function showOrderManagement(bot, chatId) {
     try {
         const orders = await getAllOrders();
-        const pending = orders.filter(o => o.status === 'pending_approval' || o.status === 'pending').length;
+        const pending = orders.filter(o => o.status === 'pending_approval').length;
+        const processing = orders.filter(o => o.status === 'processing').length;
         const completed = orders.filter(o => o.status === 'delivered').length;
         const revenue = orders.filter(o => o.status === 'delivered').reduce((sum, o) => sum + (parseInt(o.total_price) || 0), 0);
         
@@ -456,8 +410,9 @@ async function showOrderManagement(bot, chatId) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 📊 **Statistics**
-• Total Orders: ${orders.length}
-• Pending: ${pending}
+• Total: ${orders.length}
+• Pending Approval: ${pending}
+• Processing: ${processing}
 • Completed: ${completed}
 • Total Revenue: ₹${revenue}`;
 
@@ -472,19 +427,13 @@ async function showOrderManagement(bot, chatId) {
 // ==================== PAYMENT MANAGEMENT ====================
 async function showPaymentManagement(bot, chatId) {
     try {
-        const payments = await getPayments?.(1000) || [];
-        const pending = payments.filter(p => p.status === 'pending').length;
-        const completed = payments.filter(p => p.status === 'completed').length;
-        const totalAmount = payments.reduce((sum, p) => sum + (parseInt(p.amount) || 0), 0);
-        
         let message = `💰 **Payment Management**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-📊 **Statistics**
-• Total Payments: ${payments.length}
-• Pending: ${pending}
-• Completed: ${completed}
-• Total Amount: ₹${totalAmount}`;
+📊 **Manual Payment Only**
+• Users upload screenshot + UTR
+• Admin approves/rejects
+• Vouchers delivered after approval`;
 
         await bot.sendMessage(chatId, message, {
             parse_mode: 'Markdown'
@@ -494,74 +443,16 @@ async function showPaymentManagement(bot, chatId) {
     }
 }
 
-// ==================== DISCOUNT MANAGEMENT ====================
-async function showDiscountManagement(bot, chatId) {
-    let message = `🏷️ **Discount Management**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📌 Feature coming soon...`;
-
-    await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown'
-    });
-}
-
-// ==================== COUPON MANAGEMENT ====================
-async function showCouponManagement(bot, chatId) {
-    let message = `🎟️ **Coupon Management**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📌 Feature coming soon...`;
-
-    await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown'
-    });
-}
-
-// ==================== REFERRAL MANAGEMENT ====================
-async function showReferralManagement(bot, chatId) {
-    let message = `🤝 **Referral Management**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📌 Feature coming soon...`;
-
-    await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown'
-    });
-}
-
-// ==================== ANALYTICS ====================
-async function showAnalytics(bot, chatId) {
-    try {
-        const users = await getAllUsers();
-        const orders = await getAllOrders();
-        const revenue = orders.filter(o => o.status === 'delivered').reduce((sum, o) => sum + (parseInt(o.total_price) || 0), 0);
-        
-        let message = `📈 **Analytics Dashboard**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📊 **Overview**
-• Total Users: ${users.length}
-• Total Orders: ${orders.length}
-• Total Revenue: ₹${revenue}
-• Conversion Rate: ${users.length ? ((orders.filter(o => o.status === 'delivered').length / users.length) * 100).toFixed(2) : 0}%`;
-
-        await bot.sendMessage(chatId, message, {
-            parse_mode: 'Markdown'
-        });
-    } catch (error) {
-        console.error('Analytics error:', error);
-    }
-}
-
 // ==================== SETTINGS ====================
 async function showSettings(bot, chatId) {
     const botStatus = await getBotStatus();
+    const maintenance = await getSetting('maintenance_mode') || 'false';
     
     let message = `⚙️ **Settings**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🤖 **Bot Status:** ${botStatus === 'active' ? '✅ Active' : '❌ Inactive'}`;
+🤖 **Bot Status:** ${botStatus === 'active' ? '✅ Active' : '❌ Inactive'}
+🔧 **Maintenance:** ${maintenance === 'true' ? '⚠️ On' : '✅ Off'}`;
 
     await bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown'
@@ -573,216 +464,24 @@ async function showBackupManagement(bot, chatId) {
     let message = `🔄 **Backup Management**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-📌 Feature coming soon...`;
+📌 Use /backup to create backup
+📌 Use /restore [id] to restore`;
 
     await bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown'
     });
 }
 
-// ==================== SECURITY MANAGEMENT ====================
-async function showSecurityManagement(bot, chatId) {
-    let message = `🔐 **Security Management**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📌 Feature coming soon...`;
-
-    await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown'
-    });
+// ==================== GET FUNCTIONS ====================
+async function getBotStatus() {
+    return await getSetting('bot_status') || 'active';
 }
-
-// ==================== BROADCAST MANAGEMENT ====================
-async function showBroadcastManagement(bot, chatId) {
-    let message = `📢 **Broadcast Management**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📌 Feature coming soon...`;
-
-    await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown'
-    });
-}
-
-// ==================== INTEGRATION MANAGEMENT ====================
-async function showIntegrationManagement(bot, chatId) {
-    let message = `🔌 **Integration Management**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📌 Feature coming soon...`;
-
-    await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown'
-    });
-}
-
-// ==================== SYSTEM MANAGEMENT ====================
-async function showSystemManagement(bot, chatId) {
-    const memory = process.memoryUsage();
-    
-    let message = `🛠️ **System Management**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📊 **System Info**
-• Node Version: ${process.version}
-• Platform: ${process.platform}
-• Uptime: ${formatUptime(process.uptime())}
-• Memory: ${(memory.heapUsed / 1024 / 1024).toFixed(2)} MB
-• Admin Mode: ✅ Active`;
-
-    await bot.sendMessage(chatId, message, {
-        parse_mode: 'Markdown'
-    });
-}
-
-// ==================== HELP ====================
-async function showHelp(bot, chatId) {
-    const message = `❓ **Admin Help Center**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📊 **Dashboard** - View live statistics
-👥 **Users** - Manage users
-📁 **Categories** - Manage categories
-🎫 **Vouchers** - Manage vouchers
-📋 **Orders** - Manage orders
-💰 **Payments** - Manage payments
-⚙️ **Settings** - Bot settings
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔒 **Admin Mode Active** - Click 'Exit Admin' to return`;
-
-    await bot.sendMessage(chatId, message, { 
-        parse_mode: 'Markdown'
-    });
-}
-
-// ==================== CALLBACK HANDLER ====================
-async function handleAdminCallback(bot, callbackQuery) {
-    const chatId = callbackQuery.message.chat.id;
-    const data = callbackQuery.data;
-    
-    await bot.answerCallbackQuery(callbackQuery.id);
-    
-    switch(data) {
-        case 'admin_stats':
-        case 'admin_refresh_dashboard':
-            await showDashboard(bot, chatId);
-            break;
-            
-        case 'admin_users':
-            await showUserManagement(bot, chatId);
-            break;
-            
-        case 'admin_categories':
-            await showCategoryManagement(bot, chatId);
-            break;
-            
-        case 'admin_add_category':
-            adminState[chatId] = { action: 'add_category' };
-            await bot.sendMessage(chatId, '➕ Send category amount (e.g., 500 for ₹500 voucher):');
-            break;
-            
-        case 'admin_vouchers':
-            await showVoucherManagement(bot, chatId);
-            break;
-            
-        case 'admin_orders':
-            await showOrderManagement(bot, chatId);
-            break;
-            
-        case 'admin_payments':
-            await showPaymentManagement(bot, chatId);
-            break;
-            
-        case 'admin_discounts':
-            await showDiscountManagement(bot, chatId);
-            break;
-            
-        case 'admin_reports':
-            await showAnalytics(bot, chatId);
-            break;
-            
-        case 'admin_settings':
-            await showSettings(bot, chatId);
-            break;
-            
-        case 'toggle_bot':
-            const currentStatus = await getBotStatus();
-            await setBotStatus(currentStatus === 'active' ? 'inactive' : 'active');
-            await bot.sendMessage(chatId, `✅ Bot status changed to ${currentStatus === 'active' ? 'inactive' : 'active'}`);
-            await showSettings(bot, chatId);
-            break;
-            
-        case 'admin_backup':
-            await showBackupManagement(bot, chatId);
-            break;
-            
-        case 'admin_security':
-            await showSecurityManagement(bot, chatId);
-            break;
-            
-        case 'admin_broadcast':
-            await showBroadcastManagement(bot, chatId);
-            break;
-            
-        case 'admin_system':
-            await showSystemManagement(bot, chatId);
-            break;
-            
-        case 'admin_help':
-            await showHelp(bot, chatId);
-            break;
-            
-        case 'admin_back':
-            await adminCommand(bot, { chat: { id: chatId } });
-            break;
-            
-        default:
-            // ❌ কোন error message দেখানো হবে না
-            console.log(`Admin callback ${data} - silently ignored`);
-    }
-}
-
-// ==================== HELPER FUNCTIONS ====================
-function formatUptime(seconds) {
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor(((seconds % 86400) % 3600) / 60);
-    const secs = Math.floor(((seconds % 86400) % 3600) % 60);
-    
-    const parts = [];
-    if (days > 0) parts.push(`${days}d`);
-    if (hours > 0) parts.push(`${hours}h`);
-    if (minutes > 0) parts.push(`${minutes}m`);
-    if (secs > 0) parts.push(`${secs}s`);
-    
-    return parts.join(' ') || '0s';
-}
-
-// ==================== SCHEDULER ====================
-const adminScheduler = {
-    runDailyTasks: async () => {
-        console.log('Running daily tasks...');
-    },
-    runWeeklyTasks: async () => {
-        console.log('Running weekly tasks...');
-    },
-    runMonthlyTasks: async () => {
-        console.log('Running monthly tasks...');
-    }
-};
-
-// Dummy functions for missing imports
-async function getPayments(limit) { return []; }
-async function getVouchersByCategory(cat) { return []; }
 
 // ==================== EXPORTS ====================
 module.exports = { 
     adminCommand, 
     handleAdminText,
     handleAdminInput,
-    handleAdminCallback,
-    adminScheduler,
     adminState,
     setAdminMode,
     exitAdminMode,
