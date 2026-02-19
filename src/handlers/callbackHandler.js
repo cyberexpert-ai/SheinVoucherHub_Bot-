@@ -164,10 +164,11 @@ Thank you for shopping with us! 🎉`;
         await sendMainMenu(bot, order.userId);
     }, 2000);
     
-    // Send notification to channel
+    // Send notification to channel (using channel ID)
     const user = db.getUser(order.userId);
-    await bot.sendMessage(process.env.CHANNEL_2,
-        `🎯 **New Order Delivered**
+    const channelId = db.getChannel2Id();
+    
+    const notificationMsg = `🎯 **New Order Delivered**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ╰➤👤 **User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})
@@ -178,9 +179,20 @@ Thank you for shopping with us! 🎉`;
 ╰➤💰 **Amount:** ₹${order.totalPrice}
 
 🤖 **Bot:** @SheinVoucherHub_Bot
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-        { parse_mode: 'Markdown' }
-    );
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+    try {
+        await bot.sendMessage(channelId, notificationMsg, { parse_mode: 'Markdown' });
+        console.log(`Notification sent to channel ${channelId}`);
+    } catch (error) {
+        console.error('Error sending to channel:', error);
+        // Try sending to username as fallback
+        try {
+            await bot.sendMessage(process.env.CHANNEL_2_USERNAME, notificationMsg, { parse_mode: 'Markdown' });
+        } catch (e) {
+            console.error('Error sending to channel username:', e);
+        }
+    }
     
     await bot.sendMessage(chatId, `✅ Order ${orderId} approved! Vouchers sent.`);
 }
