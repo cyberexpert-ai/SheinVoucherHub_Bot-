@@ -2,12 +2,12 @@ const express = require('express');
 const TelegramBot = require('node-telegram-bot-api');
 const dotenv = require('dotenv');
 const bodyParser = require('body-parser');
-const cron = require('node-cron');  // এই লাইনটি ঠিক আছে কিনা চেক করুন
+const cron = require('node-cron');
 const { setupGoogleSheets } = require('./sheets/googleSheets');
 const { messageHandler } = require('./handlers/messageHandler');
 const { callbackHandler } = require('./handlers/callbackHandler');
 const { paymentHandler } = require('./handlers/paymentHandler');
-const { adminScheduler } = require('./commands/admin');
+const { adminScheduler, isAdminMode, setAdminMode } = require('./commands/admin');
 
 dotenv.config();
 
@@ -22,22 +22,23 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // Store bot instance globally
 global.bot = bot;
 
+// Admin Mode State - এই ভেরিয়েবল ট্র্যাক করবে অ্যাডমিন কোন মোডে আছে
+global.adminMode = false;
+global.adminChatId = null;
+
 // Initialize Google Sheets
 setupGoogleSheets();
 
-// Scheduled Tasks - এখানে node-cron ব্যবহার করা হয়েছে
+// Scheduled Tasks
 cron.schedule('0 0 * * *', () => {
-    console.log('Running daily tasks...');
     adminScheduler.runDailyTasks();
 });
 
 cron.schedule('0 0 * * 0', () => {
-    console.log('Running weekly tasks...');
     adminScheduler.runWeeklyTasks();
 });
 
 cron.schedule('0 0 1 * *', () => {
-    console.log('Running monthly tasks...');
     adminScheduler.runMonthlyTasks();
 });
 
@@ -48,7 +49,7 @@ bot.on('message', async (msg) => {
     const userId = msg.from.id;
     const text = msg.text;
 
-    // Admin bypass
+    // Admin bypass - সবসময় অ্যাডমিনের মেসেজ অ্যাডমিন হ্যান্ডলার-এ যাবে
     if (userId.toString() === process.env.ADMIN_ID) {
         return messageHandler(bot, msg);
     }
@@ -88,7 +89,8 @@ app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok', 
         timestamp: Date.now(),
-        uptime: process.uptime()
+        uptime: process.uptime(),
+        adminMode: global.adminMode
     });
 });
 
