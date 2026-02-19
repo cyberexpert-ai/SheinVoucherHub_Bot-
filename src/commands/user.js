@@ -19,8 +19,9 @@ async function buyVouchers(bot, msg) {
     // Create keyboard exactly like the image
     const keyboard = {
         inline_keyboard: categories.map(cat => {
+            const availableVouchers = db.getAvailableVouchersCount(cat.id);
             return [{
-                text: `${cat.name} (Stock: ${cat.stock})`,
+                text: `${cat.name} (Stock: ${availableVouchers})`,
                 callback_data: `select_cat_${cat.id}`
             }];
         }).concat([[{ text: '← Back', callback_data: 'back_to_main' }]])
@@ -36,8 +37,9 @@ async function selectCategory(bot, chatId, userId, categoryId) {
     await deletePreviousMessage(bot, chatId, userId);
     
     const cat = db.getCategory(categoryId);
+    const availableVouchers = db.getAvailableVouchersCount(categoryId);
     
-    if (!cat || cat.stock <= 0) {
+    if (!cat || availableVouchers <= 0) {
         return bot.sendMessage(chatId, '❌ This category is out of stock!');
     }
     
@@ -47,40 +49,30 @@ async function selectCategory(bot, chatId, userId, categoryId) {
     userState[userId] = {
         categoryId: cat.id,
         categoryName: cat.name,
-        stock: cat.stock,
+        availableVouchers: availableVouchers,
         prices: prices,
         step: 'selecting_quantity'
     };
     
-    // Create price display
+    // Create price display exactly like the image
     let priceText = `**${cat.name}**\n`;
-    priceText += `Available stock: ${cat.stock} codes\n\n`;
+    priceText += `Available stock: ${availableVouchers} codes\n\n`;
     priceText += `**Available Packages (per-code):**\n`;
+    priceText += `- 1 Code → ₹${prices[1]}.00 / code\n`;
+    priceText += `- 5 Codes → ₹${prices[5]}.00 / code\n`;
+    priceText += `- 10 Codes → ₹${prices[10]}.00 / code\n`;
+    priceText += `- 20+ Codes → ₹${prices[20]}.00 / code\n\n`;
+    priceText += `**Select quantity:**`;
     
-    // Sort quantities
-    const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
-    
-    quantities.forEach(q => {
-        priceText += `- ${q} Code${q > 1 ? 's' : ''} → ₹${prices[q]}.00 / code\n`;
-    });
-    
-    priceText += `\n**Select quantity:**`;
-    
-    // Create quantity buttons
-    const qtyButtons = [];
-    quantities.forEach(q => {
-        qtyButtons.push([{
-            text: `${q} code${q > 1 ? 's' : ''}`,
-            callback_data: `qty_${q}`
-        }]);
-    });
-    
-    // Add Other amount and Back buttons
-    qtyButtons.push([{ text: 'Other amount', callback_data: 'qty_custom' }]);
-    qtyButtons.push([{ text: 'Back', callback_data: 'back_to_categories' }]);
-    
+    // Create quantity buttons exactly like the image
     const keyboard = {
-        inline_keyboard: qtyButtons
+        inline_keyboard: [
+            [{ text: '1 code', callback_data: 'qty_1' }],
+            [{ text: '5 codes', callback_data: 'qty_5' }],
+            [{ text: '10 codes', callback_data: 'qty_10' }],
+            [{ text: 'Other amount', callback_data: 'qty_custom' }],
+            [{ text: 'Back', callback_data: 'back_to_categories' }]
+        ]
     };
     
     await bot.sendMessage(chatId, priceText, {
@@ -102,8 +94,8 @@ async function selectQuantity(bot, chatId, userId, quantity) {
     const state = userState[userId];
     const qty = parseInt(quantity);
     
-    if (qty > state.stock) {
-        return bot.sendMessage(chatId, `❌ Only ${state.stock} codes available!`);
+    if (qty > state.availableVouchers) {
+        return bot.sendMessage(chatId, `❌ Only ${state.availableVouchers} codes available!`);
     }
     
     // Calculate total price
@@ -226,6 +218,12 @@ Thank you for your patience! 🙏`,
         // Notify admin
         await notifyAdmin(bot, state.orderId, userId, utr, state.screenshot);
         
+        // Return to main menu after submission
+        setTimeout(async () => {
+            const { startCommand } = require('./start');
+            await startCommand(bot, { chat: { id: chatId }, from: { id: userId } });
+        }, 3000);
+        
         delete userState[userId];
     }
 }
@@ -281,7 +279,7 @@ async function myOrders(bot, msg) {
         return bot.sendMessage(chatId, '📦 **You don\'t have any orders yet.**', {
             parse_mode: 'Markdown',
             reply_markup: {
-                keyboard: [['← Back']],
+                keyboard: [['← Back to Menu']],
                 resize_keyboard: true
             }
         });
@@ -307,7 +305,7 @@ async function myOrders(bot, msg) {
     const keyboard = {
         inline_keyboard: sortedOrders.slice(0, 5).map(order => [
             { text: `📦 ${order.id}`, callback_data: `view_order_${order.id}` }
-        ]).concat([[{ text: '← Back', callback_data: 'back_to_main' }]])
+        ]).concat([[{ text: '← Back to Menu', callback_data: 'back_to_main' }]])
     };
     
     await bot.sendMessage(chatId, text, {
@@ -426,13 +424,16 @@ async function handleRecovery(bot, msg) {
             errorMsg = '⏰ **Recovery period expired** (2 hours limit)';
         }
         
-        return bot.sendMessage(chatId, errorMsg, {
+        await bot.sendMessage(chatId, errorMsg, {
             parse_mode: 'Markdown',
             reply_markup: {
                 keyboard: [['← Back to Menu']],
                 resize_keyboard: true
             }
         });
+        
+        delete userState[userId];
+        return;
     }
     
     // Notify admin
