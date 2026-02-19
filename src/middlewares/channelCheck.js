@@ -1,5 +1,5 @@
 async function checkChannels(bot, userId) {
-    const channels = [process.env.CHANNEL_1, process.env.CHANNEL_2];
+    const channels = [process.env.CHANNEL_1_USERNAME, process.env.CHANNEL_2_USERNAME];
     
     for (const channel of channels) {
         try {
@@ -17,8 +17,8 @@ async function checkChannels(bot, userId) {
 async function sendJoinMessage(bot, chatId) {
     const message = `⚠️ **Please join our channels first:**
 
-📢 ${process.env.CHANNEL_1}
-📢 ${process.env.CHANNEL_2}
+📢 ${process.env.CHANNEL_1_USERNAME}
+📢 ${process.env.CHANNEL_2_USERNAME}
 
 After joining, click verify button below.`;
 
@@ -27,8 +27,8 @@ After joining, click verify button below.`;
         reply_markup: {
             inline_keyboard: [
                 [
-                    { text: '📢 Join Channel 1', url: `https://t.me/${process.env.CHANNEL_1.replace('@', '')}` },
-                    { text: '📢 Join Channel 2', url: `https://t.me/${process.env.CHANNEL_2.replace('@', '')}` }
+                    { text: '📢 Official channel', url: `https://t.me/${process.env.CHANNEL_1_USERNAME.replace('@', '')}` },
+                    { text: '🔔 order alart', url: `https://t.me/${process.env.CHANNEL_2_USERNAME.replace('@', '')}` }
                 ],
                 [
                     { text: '✅ Verify', callback_data: 'verify_channels' }
