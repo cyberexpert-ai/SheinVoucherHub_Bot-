@@ -1,9 +1,126 @@
+# Node modules
 node_modules/
-package-lock.json
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Environment variables
 .env
 .env.local
 .env.production
+.env.development
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
 logs/
 *.log
-data.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+.nyc_output/
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm/
+
+# Optional eslint cache
+.eslintcache
+
+# Output files
+dist/
+build/
+out/
+temp/
+tmp/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 .DS_Store
+.vscode/
+.idea/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Bot specific
+temp/
+downloads/
+screenshots/
+uploads/
+backups/
+
+# PM2
+pm2-*.log
+.pm2/
+pm2.json
+ecosystem.config.js
+
+# Test files
+test/
+tests/
+__tests__/
+coverage/
+
+# Docker
+docker/
+Dockerfile
+docker-compose.yml
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Uploads
+public/uploads/
+uploads/
+
+# Environment specific
+.env.production
+.env.development
+.env.local
+.env.test
+
+# Package locks
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Session files
+.session
+.sessions
+
+# Cache files
+.cache/
+.cache-loader
