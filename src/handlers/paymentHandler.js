@@ -1,127 +1,150 @@
 const db = require('../database/database');
+const buyVoucher = require('../commands/user/buyVoucher');
+const { Markup } = require('telegraf');
 
-// UTR ফরম্যাট চেক করার ফাংশন
-function isValidUTR(utr) {
-    return /^[A-Z0-9]{6,30}$/.test(utr);
-}
-
-// পেমেন্ট ইন্সট্রাকশন পাঠান
-async function sendPaymentInstructions(bot, chatId, userId, category, quantity, total, pricePerCode, orderId) {
-    const paymentQR = db.getPaymentQR();
-    
-    const message = `💳 **Payment Instructions**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📋 **Order Summary**\n• Order ID: \`${orderId}\`\n• Category: ${category}\n• Quantity: ${quantity}\n• Price per code: ₹${pricePerCode}\n• Total: ₹${total}\n\n📱 **Payment Steps:**\n1️⃣ Scan QR code below\n2️⃣ Pay exact amount: ₹${total}\n3️⃣ Take screenshot\n4️⃣ Click "I have paid" button below\n5️⃣ Upload screenshot and UTR\n\n⚠️ **Fake payments = Permanent ban!**`;
-
-    await bot.sendPhoto(chatId, paymentQR, {
-        caption: message,
-        parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: '✅ I have paid', callback_data: `upload_ss_${orderId}` }],
-                [{ text: '❌ Cancel', callback_data: 'back_to_main' }]
-            ]
-        }
-    });
-}
-
-// UTR প্রসেস করুন
-async function processUTR(utr, orderId, userId, screenshot, bot, chatId, orderDetails) {
-    console.log('Processing UTR:', utr, 'for order:', orderId);
-    
-    // UTR ফরম্যাট চেক
-    if (!isValidUTR(utr)) {
-        return {
-            success: false,
-            message: '❌ **Invalid UTR Format!**\n\n' +
-                    'UTR should be 6-30 characters long and contain only letters and numbers.\n\n' +
-                    '✅ **Valid Examples:**\n' +
-                    '• `UTR123456789`\n' +
-                    '• `ABC123456`\n' +
-                    '• `1234567890`\n\n' +
-                    'Please try again:'
-        };
-    }
-    
-    try {
-        // Update order with payment
-        const paymentUpdated = db.updateOrderPayment(orderId, utr, screenshot);
-        
-        if (!paymentUpdated) {
-            return {
-                success: false,
-                message: '❌ **Error updating payment!**\n\nPlease try again or contact support.'
-            };
-        }
-        
-        // Success message
-        const successMessage = `✅ **Payment Proof Submitted Successfully!**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                              `📋 **Order Details**\n` +
-                              `• Order ID: \`${orderId}\`\n` +
-                              `• UTR Number: \`${utr}\`\n` +
-                              `• Category: ${orderDetails.categoryName}\n` +
-                              `• Quantity: ${orderDetails.quantity} codes\n` +
-                              `• Total Amount: ₹${orderDetails.total}\n\n` +
-                              `📌 **Next Steps:**\n` +
-                              `1️⃣ Admin will verify your payment\n` +
-                              `2️⃣ You'll receive vouchers within 24 hours\n` +
-                              `3️⃣ Check status in "My Orders"\n\n` +
-                              `Thank you for your patience! 🙏`;
-        
-        return {
-            success: true,
-            message: successMessage,
-            utr: utr
-        };
-    } catch (error) {
-        console.error('Error processing UTR:', error);
-        return {
-            success: false,
-            message: '❌ **Error processing payment!**\n\nPlease try again or contact support.'
-        };
-    }
-}
-
-// অ্যাডমিনকে নোটিফাই করুন
-async function notifyAdmin(bot, orderId, userId, utr, screenshot) {
-    const order = db.getOrder(orderId);
-    const user = db.getUser(userId);
-    
-    const message = `🆕 **New Payment Received**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                   `**Order ID:** \`${orderId}\`\n` +
-                   `**User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})\n` +
-                   `**User ID:** \`${userId}\`\n` +
-                   `**Category:** ${order?.categoryName || 'N/A'}\n` +
-                   `**Quantity:** ${order?.quantity || 0}\n` +
-                   `**Price/Code:** ₹${order?.pricePerCode || 0}\n` +
-                   `**Total:** ₹${order?.totalPrice || 0}\n` +
-                   `**UTR:** \`${utr}\`\n\n` +
-                   `**Action Required:** Verify payment`;
-
-    await bot.sendMessage(process.env.ADMIN_ID, message, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: '✅ Approve', callback_data: `approve_${orderId}` },
-                    { text: '❌ Reject', callback_data: `reject_${orderId}` }
-                ]
-            ]
-        }
-    });
-    
-    // Forward screenshot
-    if (screenshot) {
-        try {
-            await bot.sendPhoto(process.env.ADMIN_ID, screenshot, {
-                caption: `📸 Screenshot for Order ${orderId}`
-            });
-        } catch (error) {
-            console.error('Error sending screenshot to admin:', error);
-        }
-    }
-}
+// Store payment sessions
+const paymentSessions = new Map();
 
 module.exports = {
-    sendPaymentInstructions,
-    processUTR,
-    notifyAdmin
+  // Handle screenshot
+  async handleScreenshot(ctx) {
+    try {
+      const userId = ctx.from.id;
+      const session = buyVoucher.userSessions?.get(userId);
+      
+      if (!session?.paymentData?.waitingForScreenshot) {
+        return ctx.reply('❌ No pending payment. Please start over from Buy Voucher.');
+      }
+      
+      // Get the photo
+      const photo = ctx.message.photo[ctx.message.photo.length - 1];
+      const fileId = photo.file_id;
+      
+      // Store screenshot
+      session.paymentData.screenshotId = fileId;
+      session.paymentData.waitingForScreenshot = false;
+      session.paymentData.waitingForUTR = true;
+      buyVoucher.userSessions.set(userId, session);
+      
+      await ctx.reply(
+        '✅ Screenshot received!\n\n' +
+        'Now send your UTR / Transaction ID:\n' +
+        'Example: `ABC123456789`',
+        { parse_mode: 'Markdown' }
+      );
+      
+    } catch (error) {
+      console.error('Screenshot handler error:', error);
+      ctx.reply('An error occurred. Please try again.');
+    }
+  },
+  
+  // Handle UTR
+  async handleUTR(ctx, text) {
+    try {
+      const userId = ctx.from.id;
+      const session = buyVoucher.userSessions?.get(userId);
+      
+      if (!session?.paymentData?.waitingForUTR) {
+        return false;
+      }
+      
+      const utr = text.trim();
+      
+      // Validate UTR format (alphanumeric, 6-20 chars)
+      const utrRegex = /^[A-Za-z0-9]{6,20}$/;
+      if (!utrRegex.test(utr)) {
+        await ctx.reply('❌ Invalid UTR format. Please send a valid UTR (6-20 alphanumeric characters).');
+        return true;
+      }
+      
+      // Check if UTR is already used or blocked
+      const existingOrder = await db.query(
+        'SELECT * FROM orders WHERE utr_number = ?',
+        [utr]
+      );
+      
+      if (existingOrder.length > 0) {
+        // Block user for trying to reuse UTR
+        await db.blockUser(userId, 'UTR reuse attempt', 30);
+        await ctx.reply('🚫 This UTR has already been used. You are temporarily blocked.');
+        return true;
+      }
+      
+      const isBlocked = await db.isUTRBlocked(utr);
+      if (isBlocked) {
+        await db.blockUser(userId, 'Blocked UTR used', 60);
+        await ctx.reply('🚫 This UTR is blacklisted. You are temporarily blocked.');
+        return true;
+      }
+      
+      // Create order
+      const { categoryId, quantity, totalPrice, screenshotId } = session.paymentData;
+      const category = await db.getCategory(categoryId);
+      
+      const orderId = await db.createOrder(
+        userId,
+        categoryId,
+        category.display_name,
+        quantity,
+        totalPrice,
+        utr,
+        screenshotId
+      );
+      
+      // Clear payment session
+      session.paymentData = null;
+      buyVoucher.userSessions.set(userId, session);
+      
+      // Thank user
+      await ctx.reply(
+        `✅ *Order Submitted Successfully!*\n\n` +
+        `Order ID: \`${orderId}\`\n` +
+        `Category: ${category.display_name}\n` +
+        `Quantity: ${quantity}\n` +
+        `Amount: ₹${totalPrice}\n\n` +
+        `Your order will be processed shortly. You will receive vouchers here once approved.\n\n` +
+        `Use "Recover Vouchers" if you need codes again within 2 hours.`,
+        { parse_mode: 'Markdown' }
+      );
+      
+      // Notify admin
+      const adminId = process.env.ADMIN_ID;
+      const user = await db.getUser(userId);
+      
+      const adminMessage = 
+        `🛒 *New Order Received*\n\n` +
+        `Order ID: \`${orderId}\`\n` +
+        `User: ${user.first_name || ''} ${user.last_name || ''}\n` +
+        `Username: @${user.username || 'N/A'}\n` +
+        `User ID: \`${userId}\`\n` +
+        `Category: ${category.display_name}\n` +
+        `Quantity: ${quantity}\n` +
+        `Amount: ₹${totalPrice}\n` +
+        `UTR: \`${utr}\``;
+      
+      // Send screenshot to admin
+      await ctx.telegram.sendPhoto(adminId, screenshotId, {
+        caption: adminMessage,
+        parse_mode: 'Markdown',
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Accept', `accept_order_${orderId}`)],
+          [Markup.button.callback('❌ Reject', `reject_order_${orderId}`)],
+          [Markup.button.callback('🔨 Block UTR', `block_utr_${utr}`)]
+        ]).reply_markup
+      });
+      
+      return true;
+      
+    } catch (error) {
+      if (error.message === 'UTR_BLOCKED') {
+        await ctx.reply('🚫 This UTR is blacklisted. Order rejected.');
+        await db.blockUser(userId, 'Attempted to use blocked UTR', 60);
+      } else {
+        console.error('UTR handler error:', error);
+        await ctx.reply('An error occurred. Please try again.');
+      }
+      return true;
+    }
+  }
 };
