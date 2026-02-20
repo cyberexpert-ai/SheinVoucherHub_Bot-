@@ -1,5 +1,6 @@
 const db = require('../database/database');
 const { deletePreviousMessage } = require('../utils/helpers');
+const axios = require('axios');
 
 let userState = {};
 
@@ -241,6 +242,7 @@ async function uploadScreenshot(bot, chatId, userId, orderId) {
     });
 }
 
+// ==================== UTR HANDLING - ফিক্স করা অংশ ====================
 async function handleScreenshot(bot, msg) {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -335,6 +337,7 @@ async function handleScreenshot(bot, msg) {
             db.addWarning(userId, 'Suspicious UTR');
         }
         
+        // সাকসেস মেসেজ পাঠান
         await bot.sendMessage(chatId, 
             `✅ **Payment Proof Submitted!**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -493,9 +496,13 @@ async function notifyAdmin(bot, orderId, userId, utr, screenshot) {
     
     // Forward screenshot
     if (screenshot) {
-        await bot.sendPhoto(process.env.ADMIN_ID, screenshot, {
-            caption: `📸 Screenshot for Order ${orderId}`
-        });
+        try {
+            await bot.sendPhoto(process.env.ADMIN_ID, screenshot, {
+                caption: `📸 Screenshot for Order ${orderId}`
+            });
+        } catch (error) {
+            console.error('Error sending screenshot to admin:', error);
+        }
     }
 }
 
@@ -665,13 +672,18 @@ async function disclaimer(bot, msg) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 • All coupons given are 100% OFF upto voucher amount with NO minimum order amount required.
+
 • Contact Support if you're facing any issue with vouchers.
+
 • Only replacements are allowed if support ticket is raised within 1–2 hours of voucher delivery.
+
 • No returns.
+
 • Refund will be only given if vouchers are out of stock.
+
 • Fake payment attempts will result in permanent ban.`;
 
-    await bot.sendMessage(chatId, message, {
+    await botSendMessage(chatId, message, {
         parse_mode: 'Markdown',
         reply_markup: {
             keyboard: [['← Back to Menu']],
