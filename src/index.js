@@ -1,125 +1,115 @@
+const { Telegraf, Markup, session } = require('telegraf');
 const express = require('express');
-const TelegramBot = require('node-telegram-bot-api');
-const dotenv = require('dotenv');
-const bodyParser = require('body-parser');
-const cron = require('node-cron');
-const { messageHandler } = require('./handlers/messageHandler');
-const { callbackHandler } = require('./handlers/callbackHandler');
-const { initDatabase, cleanupExpiredOrders } = require('./database/database');
+require('dotenv').config();
 
-dotenv.config();
+const db = require('./database/database');
+const channelCheck = require('./middlewares/channelCheck');
+const auth = require('./middlewares/auth');
+const messageHandler = require('./handlers/messageHandler');
+const callbackHandler = require('./handlers/callbackHandler');
+const paymentHandler = require('./handlers/paymentHandler');
 
-const token = process.env.BOT_TOKEN;
-const bot = new TelegramBot(token, { polling: true });
+// Initialize bot
+const bot = new Telegraf(process.env.BOT_TOKEN);
+
+// Session middleware
+bot.use(session());
+
+// Express server for uptime
 const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Middleware
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
-
-// Global variables
-global.bot = bot;
-global.adminMode = false;
-global.adminChatId = null;
-
-// Initialize database
-initDatabase();
-
-// Scheduled tasks - প্রতি ৬ ঘন্টা পর পুরনো অর্ডার ক্লিনআপ
-cron.schedule('0 */6 * * *', () => {
-    console.log('Running cleanup tasks...');
-    const cleaned = cleanupExpiredOrders();
-    console.log(`Cleaned ${cleaned} expired orders`);
-});
-
-// Error handling
-process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
-});
-
-process.on('unhandledRejection', (error) => {
-    console.error('Unhandled Rejection:', error);
-});
-
-// ==================== Express Routes ====================
-
-// ✅ Root route - Render uptime check
+// Root route
 app.get('/', (req, res) => {
-    res.status(200).send("Bot is running");
+  res.status(200).send('🤖 SheinVoucherHub Bot is running');
 });
 
-// ✅ Health check route
+// Health check
 app.get('/health', (req, res) => {
-    res.status(200).send("OK");
+  res.status(200).send('OK');
 });
 
-// ==================== Bot Message Handlers ====================
-
-bot.on('message', async (msg) => {
-    try {
-        const chatId = msg.chat.id;
-        const userId = msg.from.id;
-        const text = msg.text;
-
-        // Admin bypass
-        if (userId.toString() === process.env.ADMIN_ID) {
-            return messageHandler(bot, msg);
-        }
-
-        // Check if blocked
-        const { checkBlocked } = require('./middlewares/auth');
-        if (checkBlocked(userId)) {
-            const { getBlockedUsers } = require('./database/database');
-            const blocked = getBlockedUsers().find(b => b.id === userId);
-            let msgText = '⛔ **You are blocked!**\n';
-            
-            if (blocked?.expiresAt) {
-                const expiry = new Date(blocked.expiresAt);
-                msgText += `\n**Reason:** ${blocked.reason}\n**Expires:** ${expiry.toLocaleString()}`;
-            } else {
-                msgText += `\n**Reason:** ${blocked?.reason || 'Violation of rules'}`;
-            }
-            
-            msgText += `\n\nContact ${process.env.SUPPORT_BOT} for appeal.`;
-            
-            return bot.sendMessage(chatId, msgText, {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '🆘 Contact Support', url: `https://t.me/${process.env.SUPPORT_BOT.replace('@', '')}` }]
-                    ]
-                }
-            });
-        }
-
-        messageHandler(bot, msg);
-    } catch (error) {
-        console.error('Error in message handler:', error);
+// Middleware to check channel membership for all commands except /start
+bot.use(async (ctx, next) => {
+  if (ctx.message?.text === '/start' || ctx.callbackQuery?.data?.startsWith('verify_')) {
+    return next();
+  }
+  
+  // Check if user is blocked
+  const isBlocked = await db.isUserBlocked(ctx.from.id);
+  if (isBlocked) {
+    const user = await db.getUser(ctx.from.id);
+    let blockMsg = '🚫 You are blocked from using this bot.\n\n';
+    if (user?.block_reason) {
+      blockMsg += `Reason: ${user.block_reason}\n`;
     }
+    if (user?.block_until) {
+      blockMsg += `Until: ${new Date(user.block_until).toLocaleString()}\n`;
+    }
+    blockMsg += '\nContact support: @SheinSupportRobot';
+    
+    return ctx.reply(blockMsg, {
+      reply_markup: {
+        keyboard: [[{ text: '🆘 Support' }]],
+        resize_keyboard: true
+      }
+    });
+  }
+  
+  return channelCheck(ctx, next);
 });
+
+// Import command modules
+const startCommand = require('./commands/start');
+const adminCommand = require('./commands/admin');
+const userCommands = require('./commands/user');
+
+// Register commands
+bot.start(startCommand);
+bot.command('admin', adminCommand);
+
+// Register user command handlers
+bot.hears('🛒 Buy Voucher', userCommands.buyVoucher);
+bot.hears('🔁 Recover Vouchers', userCommands.recoverVoucher);
+bot.hears('📦 My Orders', userCommands.myOrders);
+bot.hears('📜 Disclaimer', userCommands.disclaimer);
+bot.hears('🆘 Support', userCommands.support);
+bot.hears('↩️ Back', userCommands.back);
+bot.hears('⬅️ Leave', userCommands.leave);
 
 // Handle callback queries
-bot.on('callback_query', async (callbackQuery) => {
-    try {
-        const userId = callbackQuery.from.id;
-        
-        if (userId.toString() === process.env.ADMIN_ID) {
-            return callbackHandler(bot, callbackQuery);
-        }
+bot.on('callback_query', callbackHandler);
 
-        callbackHandler(bot, callbackQuery);
-    } catch (error) {
-        console.error('Error in callback handler:', error);
-    }
+// Handle photo messages (payment screenshots)
+bot.on('photo', paymentHandler.handleScreenshot);
+
+// Handle text messages
+bot.on('text', messageHandler);
+
+// Handle errors
+bot.catch((err, ctx) => {
+  console.error('Bot error:', err);
+  ctx.reply('An error occurred. Please try again later.').catch(() => {});
 });
 
-// ==================== Start Server ====================
+// Start bot
+bot.launch().then(() => {
+  console.log('🤖 Bot is running...');
+  
+  // Start cleanup cron jobs
+  setInterval(async () => {
+    await db.expireOldOrders();
+    await db.cleanupExpiredRecoveries();
+  }, 5 * 60 * 1000); // Every 5 minutes
+});
 
-// ⚠️ Render এর জন্য অবশ্যই এটা থাকবে
+// Start express server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server started on port ${PORT}`);
-    console.log(`Bot is running at https://${process.env.RENDER_EXTERNAL_HOSTNAME || 'localhost'}:${PORT}`);
+  console.log(`🌐 Server running on port ${PORT}`);
 });
 
-console.log('Bot started successfully!');
+// Enable graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
