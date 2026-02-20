@@ -1,41 +1,68 @@
-async function checkChannels(bot, userId) {
-    const channels = [process.env.CHANNEL_1_USERNAME, process.env.CHANNEL_2_USERNAME];
+const db = require('../database/database');
+const { Markup } = require('telegraf');
+
+module.exports = async (ctx, next) => {
+  try {
+    const userId = ctx.from.id;
+    const channel1 = process.env.CHANNEL_1;
+    const channel2 = process.env.CHANNEL_2;
     
-    for (const channel of channels) {
-        try {
-            const member = await bot.getChatMember(channel, userId);
-            if (member.status === 'left' || member.status === 'kicked') {
-                return false;
-            }
-        } catch {
-            return false;
-        }
+    // Check membership in both channels
+    let inChannel1 = false;
+    let inChannel2 = false;
+    
+    try {
+      const member1 = await ctx.telegram.getChatMember(channel1, userId);
+      inChannel1 = ['member', 'administrator', 'creator'].includes(member1.status);
+    } catch (e) {
+      console.log('Channel 1 check error:', e.message);
     }
-    return true;
-}
-
-async function sendJoinMessage(bot, chatId) {
-    const message = `⚠️ **Please join our channels first:**
-
-📢 ${process.env.CHANNEL_1_USERNAME}
-📢 ${process.env.CHANNEL_2_USERNAME}
-
-After joining, click verify button below.`;
-
-    await bot.sendMessage(chatId, message, {
+    
+    try {
+      const member2 = await ctx.telegram.getChatMember(channel2, userId);
+      inChannel2 = ['member', 'administrator', 'creator'].includes(member2.status);
+    } catch (e) {
+      console.log('Channel 2 check error:', e.message);
+    }
+    
+    // If user is in both channels, proceed
+    if (inChannel1 && inChannel2) {
+      // Update user verification status
+      await db.query(
+        'UPDATE users SET is_verified = TRUE WHERE telegram_id = ?',
+        [userId]
+      );
+      return next();
+    }
+    
+    // If not in channels, show force join message
+    const channels = [];
+    if (!inChannel1) channels.push(channel1);
+    if (!inChannel2) channels.push(channel2);
+    
+    const buttons = channels.map(ch => [Markup.button.url(ch, `https://t.me/${ch.replace('@', '')}`)]);
+    buttons.push([Markup.button.callback('✅ Verify', 'verify_membership')]);
+    
+    await ctx.reply(
+      '🚫 *Access Denied*\n\n' +
+      'You must join our channels to use this bot:\n' +
+      channels.map(ch => `🔹 ${ch}`).join('\n') +
+      '\n\nAfter joining, click Verify button.',
+      {
         parse_mode: 'Markdown',
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: '📢 Official channel', url: `https://t.me/${process.env.CHANNEL_1_USERNAME.replace('@', '')}` },
-                    { text: '🔔 order alart', url: `https://t.me/${process.env.CHANNEL_2_USERNAME.replace('@', '')}` }
-                ],
-                [
-                    { text: '✅ Verify', callback_data: 'verify_channels' }
-                ]
-            ]
-        }
-    });
-}
-
-module.exports = { checkChannels, sendJoinMessage };
+        reply_markup: Markup.inlineKeyboard(buttons).reply_markup
+      }
+    );
+    
+    // Delete previous message if exists
+    if (ctx.message) {
+      try {
+        await ctx.deleteMessage(ctx.message.message_id);
+      } catch (e) {}
+    }
+    
+  } catch (error) {
+    console.error('Channel check error:', error);
+    return next();
+  }
+};
