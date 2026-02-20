@@ -146,15 +146,7 @@ async function handleCustomQuantity(bot, chatId, userId, text) {
     const total = pricePerCode * qty;
     
     // Show price confirmation
-    const confirmMsg = `📊 **Price Calculation**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Category: ${state.categoryName}
-Quantity: ${qty} codes
-Price per code: ₹${pricePerCode}
-Total Amount: ₹${total}
-
-Do you want to proceed?`;
+    const confirmMsg = `📊 **Price Calculation**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nCategory: ${state.categoryName}\nQuantity: ${qty} codes\nPrice per code: ₹${pricePerCode}\nTotal Amount: ₹${total}\n\nDo you want to proceed?`;
 
     const keyboard = {
         inline_keyboard: [
@@ -198,24 +190,7 @@ async function confirmQuantity(bot, chatId, userId, qty) {
 async function sendPaymentInstructions(bot, chatId, userId, category, quantity, total, pricePerCode, orderId) {
     const paymentQR = db.getPaymentQR();
     
-    const message = `💳 **Payment Instructions**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📋 **Order Summary**
-• Order ID: \`${orderId}\`
-• Category: ${category}
-• Quantity: ${quantity}
-• Price per code: ₹${pricePerCode}
-• Total: ₹${total}
-
-📱 **Payment Steps:**
-1️⃣ Scan QR code below
-2️⃣ Pay exact amount: ₹${total}
-3️⃣ Take screenshot
-4️⃣ Click "I have paid" button below
-5️⃣ Upload screenshot and UTR
-
-⚠️ **Fake payments = Permanent ban!**`;
+    const message = `💳 **Payment Instructions**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n📋 **Order Summary**\n• Order ID: \`${orderId}\`\n• Category: ${category}\n• Quantity: ${quantity}\n• Price per code: ₹${pricePerCode}\n• Total: ₹${total}\n\n📱 **Payment Steps:**\n1️⃣ Scan QR code below\n2️⃣ Pay exact amount: ₹${total}\n3️⃣ Take screenshot\n4️⃣ Click "I have paid" button below\n5️⃣ Upload screenshot and UTR\n\n⚠️ **Fake payments = Permanent ban!**`;
 
     await bot.sendPhoto(chatId, paymentQR, {
         caption: message,
@@ -330,7 +305,8 @@ async function handleScreenshot(bot, msg) {
         db.addUsedUTR(utr);
         
         // Update order with payment
-        db.updateOrderPayment(state.orderId, utr, state.screenshot);
+        const paymentUpdated = db.updateOrderPayment(state.orderId, utr, state.screenshot);
+        console.log('Payment updated:', paymentUpdated);
         
         // Add warning for suspicious UTR
         if (utr.includes('FAKE') || utr.includes('TEST') || utr.includes('DEMO') || utr.includes('123456')) {
@@ -339,18 +315,7 @@ async function handleScreenshot(bot, msg) {
         
         // সাকসেস মেসেজ পাঠান
         await bot.sendMessage(chatId, 
-            `✅ **Payment Proof Submitted!**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Order ID: \`${state.orderId}\`
-UTR: \`${utr}\`
-
-📌 **Next Steps:**
-• Admin will verify your payment
-• You'll receive vouchers within 24 hours
-• Check status in "My Orders"
-
-Thank you for your patience! 🙏`,
+            `✅ **Payment Proof Submitted!**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nOrder ID: \`${state.orderId}\`\nUTR: \`${utr}\`\n\n📌 **Next Steps:**\n• Admin will verify your payment\n• You'll receive vouchers within 24 hours\n• Check status in "My Orders"\n\nThank you for your patience! 🙏`,
             { parse_mode: 'Markdown' }
         );
         
@@ -425,18 +390,7 @@ Thank you for your patience! 🙏`,
             const order = recovery.order;
             const user = db.getUser(userId);
             
-            const adminMsg = `🔄 **Recovery Request**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-**Order ID:** \`${orderId}\`
-**User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})
-**User ID:** \`${userId}\`
-**Category:** ${order.categoryName}
-**Quantity:** ${order.quantity}
-**Amount:** ₹${order.totalPrice}
-**Original Delivery:** ${new Date(order.deliveredAt || order.createdAt).toLocaleString()}
-
-**Action Required:** Process recovery`;
+            const adminMsg = `🔄 **Recovery Request**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n**Order ID:** \`${orderId}\`\n**User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})\n**User ID:** \`${userId}\`\n**Category:** ${order.categoryName}\n**Quantity:** ${order.quantity}\n**Amount:** ₹${order.totalPrice}\n**Original Delivery:** ${new Date(order.deliveredAt || order.createdAt).toLocaleString()}\n\n**Action Required:** Process recovery`;
 
             await bot.sendMessage(process.env.ADMIN_ID, adminMsg, {
                 parse_mode: 'Markdown',
@@ -468,19 +422,7 @@ async function notifyAdmin(bot, orderId, userId, utr, screenshot) {
     const order = db.getOrder(orderId);
     const user = db.getUser(userId);
     
-    const message = `🆕 **New Payment Received**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-**Order ID:** \`${orderId}\`
-**User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})
-**User ID:** \`${userId}\`
-**Category:** ${order?.categoryName || 'N/A'}
-**Quantity:** ${order?.quantity || 0}
-**Price/Code:** ₹${order?.pricePerCode || 0}
-**Total:** ₹${order?.totalPrice || 0}
-**UTR:** \`${utr}\`
-
-**Action Required:** Verify payment`;
+    const message = `🆕 **New Payment Received**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n**Order ID:** \`${orderId}\`\n**User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})\n**User ID:** \`${userId}\`\n**Category:** ${order?.categoryName || 'N/A'}\n**Quantity:** ${order?.quantity || 0}\n**Price/Code:** ₹${order?.pricePerCode || 0}\n**Total:** ₹${order?.totalPrice || 0}\n**UTR:** \`${utr}\`\n\n**Action Required:** Verify payment`;
 
     await bot.sendMessage(process.env.ADMIN_ID, message, {
         parse_mode: 'Markdown',
@@ -560,16 +502,7 @@ async function viewOrder(bot, chatId, orderId) {
     const order = db.getOrder(orderId);
     if (!order) return;
     
-    let text = `📦 **Order Details**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-**Order ID:** \`${order.id}\`
-**Date:** ${new Date(order.createdAt).toLocaleString()}
-**Category:** ${order.categoryName}
-**Quantity:** ${order.quantity}
-**Price per code:** ₹${order.pricePerCode || 'N/A'}
-**Total:** ₹${order.totalPrice}
-**Status:** `;
+    let text = `📦 **Order Details**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n**Order ID:** \`${order.id}\`\n**Date:** ${new Date(order.createdAt).toLocaleString()}\n**Category:** ${order.categoryName}\n**Quantity:** ${order.quantity}\n**Price per code:** ₹${order.pricePerCode || 'N/A'}\n**Total:** ₹${order.totalPrice}\n**Status:** `;
     
     if (order.status === 'delivered') {
         text += '✅ Delivered';
@@ -613,14 +546,7 @@ async function recoverVouchers(bot, msg) {
     
     await deletePreviousMessage(bot, chatId);
     
-    const message = `🔁 **Recover Vouchers**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Send your Order ID
-Example: \`SVH-20260219-ABC123\`
-
-⚠️ Recovery available within 2 hours of delivery
-✅ Only orders delivered to YOU can be recovered`;
+    const message = `🔁 **Recover Vouchers**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nSend your Order ID\nExample: \`SVH-20260219-ABC123\`\n\n⚠️ Recovery available within 2 hours of delivery\n✅ Only orders delivered to YOU can be recovered`;
 
     await bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
@@ -639,16 +565,7 @@ async function support(bot, msg) {
     
     await deletePreviousMessage(bot, chatId);
     
-    const message = `🆘 **Support**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-For any issues, please contact our support robot:
-
-👉 **${process.env.SUPPORT_BOT}**
-
-They will assist you within 24 hours.
-
-Thank you for using Shein Voucher Hub!`;
+    const message = `🆘 **Support**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nFor any issues, please contact our support robot:\n\n👉 **${process.env.SUPPORT_BOT}**\n\nThey will assist you within 24 hours.\n\nThank you for using Shein Voucher Hub!`;
 
     await bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
@@ -668,22 +585,9 @@ async function disclaimer(bot, msg) {
     
     await deletePreviousMessage(bot, chatId);
     
-    const message = `📜 **Disclaimer**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    const message = `📜 **Disclaimer**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n• All coupons given are 100% OFF upto voucher amount with NO minimum order amount required.\n• Contact Support if you're facing any issue with vouchers.\n• Only replacements are allowed if support ticket is raised within 1–2 hours of voucher delivery.\n• No returns.\n• Refund will be only given if vouchers are out of stock.\n• Fake payment attempts will result in permanent ban.`;
 
-• All coupons given are 100% OFF upto voucher amount with NO minimum order amount required.
-
-• Contact Support if you're facing any issue with vouchers.
-
-• Only replacements are allowed if support ticket is raised within 1–2 hours of voucher delivery.
-
-• No returns.
-
-• Refund will be only given if vouchers are out of stock.
-
-• Fake payment attempts will result in permanent ban.`;
-
-    await botSendMessage(chatId, message, {
+    await bot.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
         reply_markup: {
             keyboard: [['← Back to Menu']],
