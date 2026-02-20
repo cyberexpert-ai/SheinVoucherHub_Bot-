@@ -59,7 +59,7 @@ async function selectCategory(bot, chatId, userId, categoryId) {
     priceText += `Available stock: ${availableVouchers} codes\n\n`;
     priceText += `**Available Packages (per-code):**\n`;
     
-    // প্রাইস গুলো সর্ট করে দেখান
+    // প্রাইস গুলো সর্ট করে দেখান (শুধু যেগুলো সেট করা আছে)
     const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
     quantities.forEach(qty => {
         priceText += `- ${qty} Code${qty > 1 ? 's' : ''} → ₹${prices[qty]}.00 / code\n`;
