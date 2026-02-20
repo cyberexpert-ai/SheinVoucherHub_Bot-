@@ -55,12 +55,11 @@ async function selectCategory(bot, chatId, userId, categoryId) {
         step: 'selecting_quantity'
     };
     
-    // Create price display - শুধু অ্যাডমিন যেসব কোয়ান্টিটি সেট করেছে সেগুলো দেখাবে
+    // Create price display
     let priceText = `**${cat.name}**\n`;
     priceText += `Available stock: ${availableVouchers} codes\n\n`;
     priceText += `**Available Packages (per-code):**\n`;
     
-    // প্রাইস গুলো সর্ট করে দেখান (শুধু যেগুলো সেট করা আছে)
     const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
     quantities.forEach(qty => {
         priceText += `- ${qty} Code${qty > 1 ? 's' : ''} → ₹${prices[qty]}.00 / code\n`;
@@ -68,12 +67,10 @@ async function selectCategory(bot, chatId, userId, categoryId) {
     
     priceText += `\n**Select quantity:**`;
     
-    // কোয়ান্টিটি বাটন তৈরি করুন - শুধু অ্যাডমিন যেসব সেট করেছে সেগুলো
     const qtyButtons = quantities.map(qty => {
         return [{ text: `${qty} code${qty > 1 ? 's' : ''}`, callback_data: `qty_${qty}` }];
     });
     
-    // কাস্টম এবং ব্যাক বাটন যোগ করুন
     qtyButtons.push([{ text: 'Other amount', callback_data: 'qty_custom' }]);
     qtyButtons.push([{ text: 'Back', callback_data: 'back_to_categories' }]);
     
@@ -105,7 +102,6 @@ async function selectQuantity(bot, chatId, userId, quantity) {
         return bot.sendMessage(chatId, `❌ Only ${state.availableVouchers} codes available!`);
     }
     
-    // Calculate total price
     const pricePerCode = db.getPriceForQuantity(state.categoryId, qty);
     const total = pricePerCode * qty;
     
@@ -141,11 +137,9 @@ async function handleCustomQuantity(bot, chatId, userId, text) {
         return;
     }
     
-    // Calculate price for custom quantity
     const pricePerCode = db.getPriceForQuantity(state.categoryId, qty);
     const total = pricePerCode * qty;
     
-    // Show price confirmation
     const confirmMsg = `📊 **Price Calculation**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nCategory: ${state.categoryName}\nQuantity: ${qty} codes\nPrice per code: ₹${pricePerCode}\nTotal Amount: ₹${total}\n\nDo you want to proceed?`;
 
     const keyboard = {
@@ -217,7 +211,7 @@ async function uploadScreenshot(bot, chatId, userId, orderId) {
     });
 }
 
-// ==================== UTR HANDLING - ফিক্স করা অংশ ====================
+// ==================== UTR HANDLING - SUCCESS MESSAGE সহ ====================
 async function handleScreenshot(bot, msg) {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -269,7 +263,7 @@ async function handleScreenshot(bot, msg) {
         const utr = text.trim().toUpperCase();
         console.log('Validating UTR:', utr);
         
-        // UTR ফরম্যাট চেক (শুধু লেটার ও নাম্বার, ৬-৩০ অক্ষর)
+        // UTR ফরম্যাট চেক
         if (!/^[A-Z0-9]{6,30}$/.test(utr)) {
             console.log('Invalid UTR format');
             return bot.sendMessage(chatId, 
@@ -313,11 +307,21 @@ async function handleScreenshot(bot, msg) {
             db.addWarning(userId, 'Suspicious UTR');
         }
         
-        // সাকসেস মেসেজ পাঠান
-        await bot.sendMessage(chatId, 
-            `✅ **Payment Proof Submitted!**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nOrder ID: \`${state.orderId}\`\nUTR: \`${utr}\`\n\n📌 **Next Steps:**\n• Admin will verify your payment\n• You'll receive vouchers within 24 hours\n• Check status in "My Orders"\n\nThank you for your patience! 🙏`,
-            { parse_mode: 'Markdown' }
-        );
+        // ✅ SUCCESS MESSAGE - ইউজারকে জানিয়ে দাও যে পেমেন্ট সাবমিট হয়েছে
+        const successMessage = `✅ **Payment Proof Submitted Successfully!**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                              `📋 **Order Details**\n` +
+                              `• Order ID: \`${state.orderId}\`\n` +
+                              `• UTR Number: \`${utr}\`\n` +
+                              `• Category: ${state.categoryName}\n` +
+                              `• Quantity: ${state.quantity} codes\n` +
+                              `• Total Amount: ₹${state.total}\n\n` +
+                              `📌 **Next Steps:**\n` +
+                              `1️⃣ Admin will verify your payment\n` +
+                              `2️⃣ You'll receive vouchers within 24 hours\n` +
+                              `3️⃣ Check status in "My Orders"\n\n` +
+                              `Thank you for your patience! 🙏`;
+        
+        await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
         
         // Notify admin
         await notifyAdmin(bot, state.orderId, userId, utr, state.screenshot);
@@ -329,7 +333,7 @@ async function handleScreenshot(bot, msg) {
         setTimeout(async () => {
             const { startCommand } = require('./start');
             await startCommand(bot, { chat: { id: chatId }, from: { id: userId } });
-        }, 3000);
+        }, 5000);
         
         return;
     }
@@ -355,7 +359,6 @@ async function handleScreenshot(bot, msg) {
                 return startCommand(bot, msg);
             }
             
-            // Process recovery
             await bot.sendMessage(chatId, `⏳ **Processing recovery request for Order** \`${orderId}\`...`, {
                 parse_mode: 'Markdown'
             });
@@ -386,7 +389,6 @@ async function handleScreenshot(bot, msg) {
                 return;
             }
             
-            // Notify admin
             const order = recovery.order;
             const user = db.getUser(userId);
             
@@ -422,7 +424,16 @@ async function notifyAdmin(bot, orderId, userId, utr, screenshot) {
     const order = db.getOrder(orderId);
     const user = db.getUser(userId);
     
-    const message = `🆕 **New Payment Received**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n**Order ID:** \`${orderId}\`\n**User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})\n**User ID:** \`${userId}\`\n**Category:** ${order?.categoryName || 'N/A'}\n**Quantity:** ${order?.quantity || 0}\n**Price/Code:** ₹${order?.pricePerCode || 0}\n**Total:** ₹${order?.totalPrice || 0}\n**UTR:** \`${utr}\`\n\n**Action Required:** Verify payment`;
+    const message = `🆕 **New Payment Received**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+                   `**Order ID:** \`${orderId}\`\n` +
+                   `**User:** ${user?.firstName || 'N/A'} (@${user?.username || 'N/A'})\n` +
+                   `**User ID:** \`${userId}\`\n` +
+                   `**Category:** ${order?.categoryName || 'N/A'}\n` +
+                   `**Quantity:** ${order?.quantity || 0}\n` +
+                   `**Price/Code:** ₹${order?.pricePerCode || 0}\n` +
+                   `**Total:** ₹${order?.totalPrice || 0}\n` +
+                   `**UTR:** \`${utr}\`\n\n` +
+                   `**Action Required:** Verify payment`;
 
     await bot.sendMessage(process.env.ADMIN_ID, message, {
         parse_mode: 'Markdown',
@@ -467,7 +478,6 @@ async function myOrders(bot, msg) {
         });
     }
     
-    // Sort orders by date (newest first)
     const sortedOrders = orders.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     
     let text = '📦 **Your Orders**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
@@ -502,12 +512,18 @@ async function viewOrder(bot, chatId, orderId) {
     const order = db.getOrder(orderId);
     if (!order) return;
     
-    let text = `📦 **Order Details**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n**Order ID:** \`${order.id}\`\n**Date:** ${new Date(order.createdAt).toLocaleString()}\n**Category:** ${order.categoryName}\n**Quantity:** ${order.quantity}\n**Price per code:** ₹${order.pricePerCode || 'N/A'}\n**Total:** ₹${order.totalPrice}\n**Status:** `;
+    let text = `📦 **Order Details**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+               `**Order ID:** \`${order.id}\`\n` +
+               `**Date:** ${new Date(order.createdAt).toLocaleString()}\n` +
+               `**Category:** ${order.categoryName}\n` +
+               `**Quantity:** ${order.quantity}\n` +
+               `**Price per code:** ₹${order.pricePerCode || 'N/A'}\n` +
+               `**Total:** ₹${order.totalPrice}\n` +
+               `**Status:** `;
     
     if (order.status === 'delivered') {
         text += '✅ Delivered';
         
-        // Get vouchers for this order
         const vouchers = db.getVouchers(order.categoryId)
             .filter(v => v.orderId === orderId);
         
