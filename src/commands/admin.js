@@ -104,6 +104,47 @@ async function handleAdminText(bot, msg) {
             return true;
             
         default:
+            // Check for /updateprice command
+            if (text.startsWith('/updateprice')) {
+                const parts = text.split(' ');
+                if (parts.length !== 2) {
+                    await bot.sendMessage(chatId, 
+                        '❌ **Format:** /updateprice CategoryID|Quantity|NewPrice\n\n' +
+                        'Example: `/updateprice 1|5|52`\n' +
+                        'This will update price for 5 codes in category 1 to ₹52',
+                        { parse_mode: 'Markdown' }
+                    );
+                    return true;
+                }
+                
+                const [catId, qty, newPrice] = parts[1].split('|');
+                if (!catId || !qty || !newPrice) {
+                    await bot.sendMessage(chatId, 
+                        '❌ **Invalid Format!**\n\n' +
+                        'Use: `/updateprice CategoryID|Quantity|NewPrice`\n' +
+                        'Example: `/updateprice 1|5|52`',
+                        { parse_mode: 'Markdown' }
+                    );
+                    return true;
+                }
+                
+                const cat = db.getCategory(catId);
+                if (!cat) {
+                    await bot.sendMessage(chatId, '❌ Category not found!');
+                    return true;
+                }
+                
+                db.updateCategoryPrice(catId, qty, parseInt(newPrice));
+                await bot.sendMessage(chatId, 
+                    `✅ **Price Updated!**\n\n` +
+                    `Category: ${cat.name}\n` +
+                    `Quantity: ${qty} code${qty > 1 ? 's' : ''}\n` +
+                    `New Price: ₹${newPrice} per code`,
+                    { parse_mode: 'Markdown' }
+                );
+                return true;
+            }
+            
             console.log(`Admin: ${text} - ignored`);
             return true;
     }
@@ -138,15 +179,31 @@ async function handleAdminInput(bot, msg) {
             break;
             
         // ===== UPDATE CATEGORY PRICE =====
-        case 'update_price':
-            const [catIdPrice, qty, newPrice] = text.split('|');
-            if (!catIdPrice || !qty || !newPrice) {
-                await bot.sendMessage(chatId, '❌ Format: CategoryID|Quantity|NewPrice\nExample: 1|5|52');
+        case 'update_category_price':
+            const [catIdPrice, qtyPrice, newPriceVal] = text.split('|');
+            if (!catIdPrice || !qtyPrice || !newPriceVal) {
+                await bot.sendMessage(chatId, 
+                    '❌ **Format:** CategoryID|Quantity|NewPrice\n\n' +
+                    'Example: `1|5|52`\n' +
+                    'This will update price for 5 codes in category 1 to ₹52'
+                );
                 return;
             }
             
-            db.updateCategoryPrice(catIdPrice, qty, parseInt(newPrice));
-            await bot.sendMessage(chatId, `✅ Category ${catIdPrice} price for ${qty} codes updated to ₹${newPrice}!`);
+            const category = db.getCategory(catIdPrice);
+            if (!category) {
+                await bot.sendMessage(chatId, '❌ Category not found!');
+                return;
+            }
+            
+            db.updateCategoryPrice(catIdPrice, qtyPrice, parseInt(newPriceVal));
+            await bot.sendMessage(chatId, 
+                `✅ **Price Updated!**\n\n` +
+                `Category: ${category.name}\n` +
+                `Quantity: ${qtyPrice} code${qtyPrice > 1 ? 's' : ''}\n` +
+                `New Price: ₹${newPriceVal} per code`,
+                { parse_mode: 'Markdown' }
+            );
             delete adminState[chatId];
             break;
             
@@ -346,9 +403,17 @@ async function showCategoryManagement(bot, chatId) {
             const availableVouchers = db.getAvailableVouchersCount(c.id);
             msg += `**ID ${c.id}:** ${c.name}\n`;
             msg += `├ Stock: ${c.stock} | Vouchers: ${availableVouchers} | Sold: ${c.sold}\n`;
-            msg += `├ Prices: 1→₹${c.prices[1]}, 5→₹${c.prices[5]}, 10→₹${c.prices[10]}, 20+→₹${c.prices[20]}\n\n`;
+            msg += `├ Prices:\n`;
+            // সব প্রাইস দেখান
+            Object.keys(c.prices).sort((a,b) => parseInt(a)-parseInt(b)).forEach(qty => {
+                msg += `│  • ${qty} code${qty > 1 ? 's' : ''}: ₹${c.prices[qty]}\n`;
+            });
+            msg += `\n`;
         });
-        msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nSend a number to add new category`;
+        msg += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+        msg += `To update price: /updateprice [id]|[qty]|[price]\n`;
+        msg += `Example: /updateprice 1|5|52\n`;
+        msg += `\nSend a number to add new category`;
     }
     
     await bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
@@ -513,6 +578,18 @@ async function handleAdminCallback(bot, callbackQuery) {
         case 'admin_update_qr':
             adminState[chatId] = { action: 'update_qr' };
             await bot.sendMessage(chatId, '🔄 Send new QR code URL:');
+            break;
+            
+        case 'admin_update_category_price':
+            adminState[chatId] = { action: 'update_category_price' };
+            await bot.sendMessage(chatId, 
+                '💰 **Update Category Price**\n\n' +
+                'Send in this format:\n' +
+                '`CategoryID|Quantity|NewPrice`\n\n' +
+                'Example: `1|5|52`\n' +
+                '(This will set price for 5 codes in category 1 to ₹52)',
+                { parse_mode: 'Markdown' }
+            );
             break;
             
         case 'toggle_bot':
