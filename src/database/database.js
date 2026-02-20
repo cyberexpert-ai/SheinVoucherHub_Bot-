@@ -11,7 +11,7 @@ function initDatabase() {
             categories: [],
             vouchers: [],
             orders: [],
-            usedUTRs: [], // নতুন - ব্যবহৃত UTR ট্র্যাক করার জন্য
+            usedUTRs: [],
             blockedUsers: [],
             settings: {
                 bot_status: "active",
@@ -191,7 +191,7 @@ function addCategory(amount) {
         name: `₹${amount} Shein Voucher`,
         baseAmount: amountNum,
         prices: prices,
-        stock: 0, // স্টক ০ থেকে শুরু হবে, ভাউচার অ্যাড করলে বাড়বে
+        stock: 0,
         sold: 0,
         status: 'active',
         createdAt: new Date().toISOString()
@@ -201,6 +201,7 @@ function addCategory(amount) {
     return id;
 }
 
+// ক্যাটাগরির নির্দিষ্ট কোয়ান্টিটির প্রাইস আপডেট করার ফাংশন
 function updateCategoryPrice(categoryId, quantity, newPrice) {
     const data = loadData();
     const cat = data.categories.find(c => c.id === categoryId);
@@ -232,15 +233,22 @@ function deleteCategory(categoryId) {
     return true;
 }
 
+// ইউজার যে কোয়ান্টিটি দিবে তার জন্য সঠিক প্রাইস বের করার ফাংশন
 function getPriceForQuantity(categoryId, quantity) {
     const cat = getCategory(categoryId);
     if (!cat) return 0;
     
     const prices = cat.prices;
-    const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
     
-    // Find best price for quantity
+    // যদি সরাসরি প্রাইস থাকে
+    if (prices[quantity]) {
+        return prices[quantity];
+    }
+    
+    // না থাকলে সবচেয়ে বড় সেট করা কোয়ান্টিটির প্রাইস নিন
+    const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
     let bestPrice = prices[1] || Math.round(cat.baseAmount * 0.06);
+    
     for (const q of quantities) {
         if (quantity >= q) {
             bestPrice = prices[q];
@@ -357,7 +365,7 @@ function assignVoucher(voucherId, buyerId, orderId) {
     return false;
 }
 
-// ==================== UTR FUNCTIONS (নতুন) ====================
+// ==================== UTR FUNCTIONS ====================
 
 function isUTRUsed(utr) {
     const data = loadData();
