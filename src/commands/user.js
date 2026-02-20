@@ -1,5 +1,6 @@
 const db = require('../database/database');
 const { deletePreviousMessage } = require('../utils/helpers');
+const utrValidator = require('../utils/utrValidator');
 const axios = require('axios');
 
 let userState = {};
@@ -211,7 +212,7 @@ async function uploadScreenshot(bot, chatId, userId, orderId) {
     });
 }
 
-// ==================== UTR HANDLING - SUCCESS MESSAGE সহ ====================
+// ==================== UTR HANDLING - এখন utrValidator ব্যবহার করে ====================
 async function handleScreenshot(bot, msg) {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
@@ -259,72 +260,23 @@ async function handleScreenshot(bot, msg) {
             return startCommand(bot, msg);
         }
         
-        // UTR ভ্যালিডেশন
+        // UTR প্রসেস করুন - এখন utrValidator ব্যবহার করছে
         const utr = text.trim().toUpperCase();
-        console.log('Validating UTR:', utr);
+        const result = await utrValidator.processUTR(utr, userId, state.orderId, state.screenshot, bot, chatId, state);
         
-        // UTR ফরম্যাট চেক
-        if (!/^[A-Z0-9]{6,30}$/.test(utr)) {
-            console.log('Invalid UTR format');
-            return bot.sendMessage(chatId, 
-                '❌ **Invalid UTR Format!**\n\n' +
-                'UTR should be 6-30 characters long and contain only letters and numbers.\n\n' +
-                'Example: `UTR123456789`\n\n' +
-                'Please try again:',
-                { 
-                    parse_mode: 'Markdown',
-                    reply_markup: { force_reply: true }
-                }
-            );
+        if (!result.success) {
+            // ভুল UTR - আবার চেষ্টা করতে বলুন
+            return bot.sendMessage(chatId, result.message, {
+                parse_mode: 'Markdown',
+                reply_markup: { force_reply: true }
+            });
         }
         
-        // চেক করে UTR আগে ব্যবহার করা হয়েছে কিনা
-        if (db.isUTRUsed(utr)) {
-            console.log('UTR already used');
-            db.addWarning(userId, 'Duplicate UTR');
-            return bot.sendMessage(chatId, 
-                '❌ **This UTR has already been used!**\n\n' +
-                'Fake payment detected.\n\n' +
-                'Please try again with correct UTR:',
-                { 
-                    parse_mode: 'Markdown',
-                    reply_markup: { force_reply: true }
-                }
-            );
-        }
-        
-        console.log('UTR is valid, processing payment');
-        
-        // UTR মার্ক as used
-        db.addUsedUTR(utr);
-        
-        // Update order with payment
-        const paymentUpdated = db.updateOrderPayment(state.orderId, utr, state.screenshot);
-        console.log('Payment updated:', paymentUpdated);
-        
-        // Add warning for suspicious UTR
-        if (utr.includes('FAKE') || utr.includes('TEST') || utr.includes('DEMO') || utr.includes('123456')) {
-            db.addWarning(userId, 'Suspicious UTR');
-        }
-        
-        // ✅ SUCCESS MESSAGE - ইউজারকে জানিয়ে দাও যে পেমেন্ট সাবমিট হয়েছে
-        const successMessage = `✅ **Payment Proof Submitted Successfully!**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-                              `📋 **Order Details**\n` +
-                              `• Order ID: \`${state.orderId}\`\n` +
-                              `• UTR Number: \`${utr}\`\n` +
-                              `• Category: ${state.categoryName}\n` +
-                              `• Quantity: ${state.quantity} codes\n` +
-                              `• Total Amount: ₹${state.total}\n\n` +
-                              `📌 **Next Steps:**\n` +
-                              `1️⃣ Admin will verify your payment\n` +
-                              `2️⃣ You'll receive vouchers within 24 hours\n` +
-                              `3️⃣ Check status in "My Orders"\n\n` +
-                              `Thank you for your patience! 🙏`;
-        
-        await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
+        // সফল UTR - Success message দেখান
+        await bot.sendMessage(chatId, result.message, { parse_mode: 'Markdown' });
         
         // Notify admin
-        await notifyAdmin(bot, state.orderId, userId, utr, state.screenshot);
+        await notifyAdmin(bot, state.orderId, userId, result.utr, state.screenshot);
         
         // Clear user state
         delete userState[userId];
