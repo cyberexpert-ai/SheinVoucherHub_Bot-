@@ -1,9 +1,6 @@
 const { sendMainMenu } = require('../commands/start');
 const { handleAdminCallback } = require('../commands/admin');
-const { 
-    selectCategory, selectQuantity, uploadScreenshot,
-    myOrders, viewOrder
-} = require('../commands/user');
+const { handleUserCallback } = require('../commands/user');
 const db = require('../database/database');
 const { checkChannels } = require('../middlewares/channelCheck');
 
@@ -13,17 +10,15 @@ async function callbackHandler(bot, callbackQuery) {
     const chatId = callbackQuery.message.chat.id;
     const userId = callbackQuery.from.id;
     const data = callbackQuery.data;
-    const messageId = callbackQuery.message.message_id;
     
     await bot.answerCallbackQuery(callbackQuery.id);
-    await bot.deleteMessage(chatId, messageId).catch(() => {});
     
-    // ==================== ADMIN CALLBACKS ====================
+    // Admin callbacks
     if (data.startsWith('admin_')) {
         return handleAdminCallback(bot, callbackQuery);
     }
     
-    // ==================== CHANNEL VERIFICATION ====================
+    // Channel verification
     if (data === 'verify_channels') {
         const isMember = await checkChannels(bot, userId);
         if (isMember) {
@@ -39,7 +34,7 @@ async function callbackHandler(bot, callbackQuery) {
         return;
     }
     
-    // ==================== ORDER APPROVAL ====================
+    // Order approval
     if (data.startsWith('approve_')) {
         if (userId.toString() === process.env.ADMIN_ID) {
             const orderId = data.replace('approve_', '');
@@ -80,47 +75,14 @@ async function callbackHandler(bot, callbackQuery) {
         return;
     }
     
-    // ==================== USER CALLBACKS ====================
-    
-    if (data === 'back_to_main') {
-        return sendMainMenu(bot, chatId);
-    }
-    
-    if (data.startsWith('select_cat_')) {
-        const id = data.split('_')[2];
-        return selectCategory(bot, chatId, userId, id);
-    }
-    
-    if (data.startsWith('qty_')) {
-        const qty = data.split('_')[1];
-        return selectQuantity(bot, chatId, userId, qty);
-    }
-    
-    if (data.startsWith('upload_ss_')) {
-        const orderId = data.replace('upload_ss_', '');
-        return uploadScreenshot(bot, chatId, userId, orderId);
-    }
-    
-    if (data.startsWith('view_order_')) {
-        const orderId = data.replace('view_order_', '');
-        return viewOrder(bot, chatId, orderId);
-    }
-    
-    if (data === 'back_to_categories') {
-        const { buyVouchers } = require('../commands/user');
-        return buyVouchers(bot, { chat: { id: chatId }, from: { id: userId } });
-    }
-    
-    if (data === 'back_to_orders') {
-        return myOrders(bot, { chat: { id: chatId }, from: { id: userId } });
-    }
+    // User callbacks
+    return handleUserCallback(bot, callbackQuery);
 }
 
 async function processOrderApproval(bot, chatId, orderId) {
     const order = db.getOrder(orderId);
     if (!order) return;
     
-    // Get available vouchers
     const vouchers = db.getAvailableVouchers(order.categoryId);
     
     if (vouchers.length < order.quantity) {
@@ -130,7 +92,6 @@ async function processOrderApproval(bot, chatId, orderId) {
         );
     }
     
-    // Assign vouchers
     const assignedCodes = [];
     for (let i = 0; i < order.quantity; i++) {
         const voucher = vouchers[i];
@@ -138,10 +99,8 @@ async function processOrderApproval(bot, chatId, orderId) {
         assignedCodes.push(voucher.code);
     }
     
-    // Update order status
     db.updateOrderStatus(orderId, 'delivered');
     
-    // Send vouchers to user
     const voucherMsg = `✅ **Payment Approved! Vouchers Delivered**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -158,13 +117,11 @@ Thank you for shopping with us! 🎉`;
 
     await bot.sendMessage(order.userId, voucherMsg, { parse_mode: 'Markdown' });
     
-    // Return to main menu for user
     setTimeout(async () => {
         const { sendMainMenu } = require('../commands/start');
         await sendMainMenu(bot, order.userId);
     }, 2000);
     
-    // Send notification to channel (using channel ID)
     const user = db.getUser(order.userId);
     const channelId = db.getChannel2Id();
     
@@ -183,15 +140,8 @@ Thank you for shopping with us! 🎉`;
 
     try {
         await bot.sendMessage(channelId, notificationMsg, { parse_mode: 'Markdown' });
-        console.log(`Notification sent to channel ${channelId}`);
     } catch (error) {
         console.error('Error sending to channel:', error);
-        // Try sending to username as fallback
-        try {
-            await bot.sendMessage(process.env.CHANNEL_2_USERNAME, notificationMsg, { parse_mode: 'Markdown' });
-        } catch (e) {
-            console.error('Error sending to channel username:', e);
-        }
     }
     
     await bot.sendMessage(chatId, `✅ Order ${orderId} approved! Vouchers sent.`);
@@ -214,7 +164,6 @@ Please contact ${process.env.SUPPORT_BOT} if you think this is a mistake.`,
         { parse_mode: 'Markdown' }
     );
     
-    // Return to main menu for user
     setTimeout(async () => {
         const { sendMainMenu } = require('../commands/start');
         await sendMainMenu(bot, order.userId);
