@@ -1,671 +1,488 @@
-const fs = require('fs');
-const path = require('path');
+const mysql = require('mysql2/promise');
+require('dotenv').config();
 
-const DATA_FILE = path.join(__dirname, 'data.json');
+class Database {
+    constructor() {
+        this.pool = mysql.createPool({
+            host: process.env.DB_HOST,
+            user: process.env.DB_USER,
+            password: process.env.DB_PASSWORD,
+            database: process.env.DB_NAME,
+            port: process.env.DB_PORT || 3306,
+            waitForConnections: true,
+            connectionLimit: 10,
+            queueLimit: 0,
+            enableKeepAlive: true,
+            keepAliveInitialDelay: 0
+        });
+    }
 
-// Initialize database
-function initDatabase() {
-    if (!fs.existsSync(DATA_FILE)) {
-        const defaultData = {
-            users: [],
-            categories: [],
-            vouchers: [],
-            orders: [],
-            usedUTRs: [],
-            blockedUsers: [],
-            settings: {
-                bot_status: "active",
-                payment_qr: "https://i.supaimg.com/00332ad4-8aa7-408f-8705-55dbc91ea737.jpg",
-                recovery_hours: 2,
-                order_prefix: "SVH",
-                support_bot: "@SheinSupportRobot",
-                channel_1: "@SheinVoucherHub",
-                channel_2: "@OrdersNotify",
-                channel_2_id: "-1002862139182"
-            },
-            stats: {
-                totalUsers: 0,
-                totalOrders: 0,
-                totalRevenue: 0
+    async query(sql, params) {
+        try {
+            const [results] = await this.pool.execute(sql, params);
+            return results;
+        } catch (error) {
+            console.error('Database query error:', error);
+            throw error;
+        }
+    }
+
+    async getUser(telegramId) {
+        const users = await this.query(
+            'SELECT * FROM users WHERE telegram_id = ?',
+            [telegramId]
+        );
+        return users[0];
+    }
+
+    async createUser(telegramId, username, firstName, lastName) {
+        await this.query(
+            `INSERT INTO users (telegram_id, username, first_name, last_name, joined_at, last_active) 
+             VALUES (?, ?, ?, ?, NOW(), NOW())
+             ON DUPLICATE KEY UPDATE 
+             username = VALUES(username),
+             first_name = VALUES(first_name),
+             last_name = VALUES(last_name),
+             last_active = NOW()`,
+            [telegramId, username, firstName, lastName]
+        );
+        return this.getUser(telegramId);
+    }
+
+    async updateUserActivity(telegramId) {
+        await this.query(
+            'UPDATE users SET last_active = NOW() WHERE telegram_id = ?',
+            [telegramId]
+        );
+    }
+
+    async isUserBlocked(telegramId) {
+        const user = await this.getUser(telegramId);
+        if (!user) return false;
+        
+        if (user.is_blocked) {
+            if (user.block_until && new Date(user.block_until) > new Date()) {
+                return true;
+            } else if (user.block_until && new Date(user.block_until) <= new Date()) {
+                await this.unblockUser(telegramId);
+                return false;
             }
-        };
-        fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
-    }
-}
-
-// Load data
-function loadData() {
-    try {
-        const data = fs.readFileSync(DATA_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        console.error('Error loading data:', error);
-        return null;
-    }
-}
-
-// Save data
-function saveData(data) {
-    try {
-        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-        return true;
-    } catch (error) {
-        console.error('Error saving data:', error);
+            return user.is_blocked;
+        }
         return false;
     }
-}
 
-// ==================== USER FUNCTIONS ====================
-
-function addUser(userId, username, firstName) {
-    const data = loadData();
-    const existing = data.users.find(u => u.id === userId);
-    
-    if (!existing) {
-        data.users.push({
-            id: userId,
-            username: username || 'N/A',
-            firstName: firstName || 'N/A',
-            joinDate: new Date().toISOString(),
-            lastActive: new Date().toISOString(),
-            role: 'user',
-            orders: [],
-            totalSpent: 0,
-            status: 'active',
-            warnings: 0
-        });
-        data.stats.totalUsers = data.users.length;
-        saveData(data);
-        return true;
-    } else {
-        existing.lastActive = new Date().toISOString();
-        saveData(data);
-        return true;
-    }
-}
-
-function getUser(userId) {
-    const data = loadData();
-    return data.users.find(u => u.id === userId);
-}
-
-function getAllUsers() {
-    const data = loadData();
-    return data.users;
-}
-
-function blockUser(userId, reason, duration = null) {
-    const data = loadData();
-    const user = data.users.find(u => u.id === userId);
-    
-    if (user) {
-        user.status = 'blocked';
-        data.blockedUsers.push({
-            id: userId,
-            reason: reason,
-            date: new Date().toISOString(),
-            duration: duration,
-            expiresAt: duration ? new Date(Date.now() + duration * 3600000).toISOString() : null
-        });
-        saveData(data);
-        return true;
-    }
-    return false;
-}
-
-function unblockUser(userId) {
-    const data = loadData();
-    const user = data.users.find(u => u.id === userId);
-    
-    if (user) {
-        user.status = 'active';
-        data.blockedUsers = data.blockedUsers.filter(b => b.id !== userId);
-        saveData(data);
-        return true;
-    }
-    return false;
-}
-
-function isUserBlocked(userId) {
-    const data = loadData();
-    const blocked = data.blockedUsers.find(b => b.id === userId);
-    
-    if (!blocked) return false;
-    
-    // Check temporary block expiry
-    if (blocked.expiresAt && new Date(blocked.expiresAt) < new Date()) {
-        unblockUser(userId);
-        return false;
-    }
-    
-    return true;
-}
-
-function getBlockedUsers() {
-    const data = loadData();
-    return data.blockedUsers;
-}
-
-function addWarning(userId, reason) {
-    const data = loadData();
-    const user = data.users.find(u => u.id === userId);
-    
-    if (user) {
-        user.warnings = (user.warnings || 0) + 1;
-        if (user.warnings >= 3) {
-            blockUser(userId, '3 warnings - auto blocked');
-        }
-        saveData(data);
-        return user.warnings;
-    }
-    return 0;
-}
-
-// ==================== CATEGORY FUNCTIONS ====================
-
-function getCategories() {
-    const data = loadData();
-    return data.categories;
-}
-
-function getCategory(categoryId) {
-    const data = loadData();
-    return data.categories.find(c => c.id === categoryId);
-}
-
-function addCategory(amount) {
-    const data = loadData();
-    const id = (data.categories.length + 1).toString();
-    const amountNum = parseInt(amount);
-    
-    // Default price tiers based on amount
-    const prices = {
-        1: Math.round(amountNum * 0.058),  // 5.8% for 1 code
-        5: Math.round(amountNum * 0.052),  // 5.2% for 5 codes
-        10: Math.round(amountNum * 0.048), // 4.8% for 10 codes
-        20: Math.round(amountNum * 0.045)  // 4.5% for 20+ codes
-    };
-    
-    data.categories.push({
-        id: id,
-        name: `₹${amount} Shein Voucher`,
-        baseAmount: amountNum,
-        prices: prices,
-        stock: 0,
-        sold: 0,
-        status: 'active',
-        createdAt: new Date().toISOString()
-    });
-    
-    saveData(data);
-    return id;
-}
-
-// ক্যাটাগরির নির্দিষ্ট কোয়ান্টিটির প্রাইস আপডেট করার ফাংশন
-function updateCategoryPrice(categoryId, quantity, newPrice) {
-    const data = loadData();
-    const cat = data.categories.find(c => c.id === categoryId);
-    
-    if (cat) {
-        cat.prices[quantity.toString()] = parseInt(newPrice);
-        saveData(data);
-        return true;
-    }
-    return false;
-}
-
-function updateCategoryStock(categoryId, change) {
-    const data = loadData();
-    const cat = data.categories.find(c => c.id === categoryId);
-    
-    if (cat) {
-        cat.stock = Math.max(0, cat.stock + change);
-        saveData(data);
-        return cat.stock;
-    }
-    return 0;
-}
-
-function deleteCategory(categoryId) {
-    const data = loadData();
-    data.categories = data.categories.filter(c => c.id !== categoryId);
-    saveData(data);
-    return true;
-}
-
-// ইউজার যে কোয়ান্টিটি দিবে তার জন্য সঠিক প্রাইস বের করার ফাংশন
-function getPriceForQuantity(categoryId, quantity) {
-    const cat = getCategory(categoryId);
-    if (!cat) return 0;
-    
-    const prices = cat.prices;
-    
-    // যদি সরাসরি প্রাইস থাকে
-    if (prices[quantity]) {
-        return prices[quantity];
-    }
-    
-    // না থাকলে সবচেয়ে বড় সেট করা কোয়ান্টিটির প্রাইস নিন
-    const quantities = Object.keys(prices).map(Number).sort((a, b) => a - b);
-    let bestPrice = prices[1] || Math.round(cat.baseAmount * 0.06);
-    
-    for (const q of quantities) {
-        if (quantity >= q) {
-            bestPrice = prices[q];
-        }
-    }
-    
-    return bestPrice;
-}
-
-function calculateTotalPrice(categoryId, quantity) {
-    const pricePerCode = getPriceForQuantity(categoryId, quantity);
-    return pricePerCode * quantity;
-}
-
-// ==================== VOUCHER FUNCTIONS ====================
-
-function getVouchers(categoryId = null) {
-    const data = loadData();
-    if (categoryId) {
-        return data.vouchers.filter(v => v.categoryId === categoryId);
-    }
-    return data.vouchers;
-}
-
-function getAvailableVouchers(categoryId) {
-    const data = loadData();
-    return data.vouchers.filter(v => 
-        v.categoryId === categoryId && 
-        v.status === 'available'
-    );
-}
-
-function getAvailableVouchersCount(categoryId) {
-    return getAvailableVouchers(categoryId).length;
-}
-
-function addVoucher(code, categoryId) {
-    const data = loadData();
-    const id = `VCH-${Date.now()}-${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
-    
-    data.vouchers.push({
-        id: id,
-        code: code,
-        categoryId: categoryId,
-        status: 'available',
-        createdAt: new Date().toISOString()
-    });
-    
-    // ক্যাটাগরির স্টক বাড়ান
-    updateCategoryStock(categoryId, 1);
-    
-    saveData(data);
-    return id;
-}
-
-function bulkAddVouchers(categoryId, codes) {
-    const added = [];
-    for (const code of codes) {
-        const id = addVoucher(code, categoryId);
-        added.push(id);
-    }
-    return added;
-}
-
-function deleteVoucher(voucherId) {
-    const data = loadData();
-    const voucher = data.vouchers.find(v => v.id === voucherId);
-    
-    if (voucher && voucher.status === 'available') {
-        // ক্যাটাগরির স্টক কমান
-        updateCategoryStock(voucher.categoryId, -1);
-    }
-    
-    data.vouchers = data.vouchers.filter(v => v.id !== voucherId);
-    saveData(data);
-    return true;
-}
-
-function deleteVouchersByCategory(categoryId) {
-    const data = loadData();
-    const availableVouchers = data.vouchers.filter(v => v.categoryId === categoryId && v.status === 'available');
-    
-    // ক্যাটাগরির স্টক আপডেট
-    const cat = data.categories.find(c => c.id === categoryId);
-    if (cat) {
-        cat.stock = Math.max(0, cat.stock - availableVouchers.length);
-    }
-    
-    data.vouchers = data.vouchers.filter(v => v.categoryId !== categoryId);
-    saveData(data);
-    return true;
-}
-
-function assignVoucher(voucherId, buyerId, orderId) {
-    const data = loadData();
-    const voucher = data.vouchers.find(v => v.id === voucherId);
-    
-    if (voucher) {
-        voucher.status = 'sold';
-        voucher.buyerId = buyerId;
-        voucher.orderId = orderId;
-        voucher.soldAt = new Date().toISOString();
-        
-        // Update category sold count and stock
-        const cat = data.categories.find(c => c.id === voucher.categoryId);
-        if (cat) {
-            cat.sold = (cat.sold || 0) + 1;
-            cat.stock = Math.max(0, cat.stock - 1);
+    async blockUser(telegramId, reason, minutes = null) {
+        let blockUntil = null;
+        if (minutes) {
+            blockUntil = new Date(Date.now() + minutes * 60000);
         }
         
-        saveData(data);
-        return true;
+        await this.query(
+            `UPDATE users SET 
+             is_blocked = TRUE, 
+             block_reason = ?,
+             block_until = ? 
+             WHERE telegram_id = ?`,
+            [reason, blockUntil, telegramId]
+        );
     }
-    return false;
-}
 
-// ==================== UTR FUNCTIONS ====================
-
-function isUTRUsed(utr) {
-    const data = loadData();
-    return data.usedUTRs.includes(utr);
-}
-
-function addUsedUTR(utr) {
-    const data = loadData();
-    if (!data.usedUTRs.includes(utr)) {
-        data.usedUTRs.push(utr);
-        saveData(data);
-        return true;
+    async unblockUser(telegramId) {
+        await this.query(
+            `UPDATE users SET 
+             is_blocked = FALSE, 
+             block_reason = NULL,
+             block_until = NULL 
+             WHERE telegram_id = ?`,
+            [telegramId]
+        );
     }
-    return false;
-}
 
-// ==================== ORDER FUNCTIONS ====================
-
-function createOrder(userId, categoryId, quantity, totalPrice) {
-    const data = loadData();
-    const date = new Date();
-    const year = date.getFullYear();
-    const month = (date.getMonth() + 1).toString().padStart(2, '0');
-    const day = date.getDate().toString().padStart(2, '0');
-    const random = Math.random().toString(36).substr(2, 6).toUpperCase();
-    
-    const orderId = `SVH-${year}${month}${day}-${random}`;
-    const category = data.categories.find(c => c.id === categoryId);
-    const pricePerCode = getPriceForQuantity(categoryId, quantity);
-    
-    const recoveryExpiry = new Date();
-    recoveryExpiry.setHours(recoveryExpiry.getHours() + 2);
-    
-    data.orders.push({
-        id: orderId,
-        userId: userId,
-        categoryId: categoryId,
-        categoryName: category ? category.name : '',
-        baseAmount: category ? category.baseAmount : 0,
-        quantity: parseInt(quantity),
-        pricePerCode: pricePerCode,
-        totalPrice: parseInt(totalPrice),
-        status: 'pending',
-        paymentMethod: 'manual',
-        transactionId: null,
-        screenshot: null,
-        createdAt: date.toISOString(),
-        updatedAt: date.toISOString(),
-        recoveryExpiry: recoveryExpiry.toISOString(),
-        deliveredAt: null
-    });
-    
-    data.stats.totalOrders = data.orders.length;
-    saveData(data);
-    
-    // Update user's orders
-    const user = data.users.find(u => u.id === userId);
-    if (user) {
-        if (!user.orders) user.orders = [];
-        user.orders.push(orderId);
+    async getCategories() {
+        return this.query(
+            'SELECT * FROM categories WHERE is_active = TRUE ORDER BY CAST(name AS UNSIGNED)'
+        );
     }
-    
-    return orderId;
-}
 
-function getOrder(orderId) {
-    const data = loadData();
-    return data.orders.find(o => o.id === orderId);
-}
+    async getCategory(id) {
+        const categories = await this.query(
+            'SELECT * FROM categories WHERE id = ?',
+            [id]
+        );
+        return categories[0];
+    }
 
-function getUserOrders(userId) {
-    const data = loadData();
-    return data.orders.filter(o => o.userId === userId);
-}
+    async addCategory(name, displayName) {
+        const result = await this.query(
+            'INSERT INTO categories (name, display_name) VALUES (?, ?)',
+            [name, displayName]
+        );
+        return result.insertId;
+    }
 
-function getAllOrders() {
-    const data = loadData();
-    return data.orders;
-}
-
-function updateOrderStatus(orderId, status, adminNote = null) {
-    const data = loadData();
-    const order = data.orders.find(o => o.id === orderId);
-    
-    if (order) {
-        order.status = status;
-        order.updatedAt = new Date().toISOString();
+    async updateCategory(id, data) {
+        const updates = [];
+        const values = [];
         
-        if (status === 'delivered') {
-            order.deliveredAt = new Date().toISOString();
-            data.stats.totalRevenue = (data.stats.totalRevenue || 0) + order.totalPrice;
+        for (const [key, value] of Object.entries(data)) {
+            updates.push(`${key} = ?`);
+            values.push(value);
+        }
+        values.push(id);
+        
+        await this.query(
+            `UPDATE categories SET ${updates.join(', ')} WHERE id = ?`,
+            values
+        );
+    }
+
+    async deleteCategory(id) {
+        await this.query('UPDATE categories SET is_active = FALSE WHERE id = ?', [id]);
+    }
+
+    async getPriceTier(categoryId, quantity) {
+        const tiers = await this.query(
+            'SELECT * FROM price_tiers WHERE category_id = ? AND quantity = ?',
+            [categoryId, quantity]
+        );
+        return tiers[0];
+    }
+
+    async getPriceTiers(categoryId) {
+        return this.query(
+            'SELECT * FROM price_tiers WHERE category_id = ? ORDER BY quantity',
+            [categoryId]
+        );
+    }
+
+    async updatePriceTier(categoryId, quantity, price) {
+        await this.query(
+            `INSERT INTO price_tiers (category_id, quantity, price) 
+             VALUES (?, ?, ?)
+             ON DUPLICATE KEY UPDATE price = VALUES(price)`,
+            [categoryId, quantity, price]
+        );
+    }
+
+    async deletePriceTier(categoryId, quantity) {
+        await this.query(
+            'DELETE FROM price_tiers WHERE category_id = ? AND quantity = ?',
+            [categoryId, quantity]
+        );
+    }
+
+    async getVoucherCodes(categoryId, limit = null) {
+        let query = 'SELECT * FROM voucher_codes WHERE category_id = ? AND is_used = FALSE';
+        const params = [categoryId];
+        
+        if (limit) {
+            query += ' LIMIT ?';
+            params.push(limit);
+        }
+        
+        return this.query(query, params);
+    }
+
+    async getAvailableStock(categoryId) {
+        const result = await this.query(
+            'SELECT COUNT(*) as stock FROM voucher_codes WHERE category_id = ? AND is_used = FALSE',
+            [categoryId]
+        );
+        return result[0].stock;
+    }
+
+    async addVoucherCode(categoryId, code, addedBy) {
+        await this.query(
+            'INSERT INTO voucher_codes (category_id, code, added_by) VALUES (?, ?, ?)',
+            [categoryId, code, addedBy]
+        );
+        
+        // Update category stock count
+        await this.updateCategoryStock(categoryId);
+    }
+
+    async addBulkVoucherCodes(categoryId, codes, addedBy) {
+        const values = codes.map(code => [categoryId, code, addedBy]);
+        await this.query(
+            'INSERT INTO voucher_codes (category_id, code, added_by) VALUES ?',
+            [values]
+        );
+        
+        // Update category stock count
+        await this.updateCategoryStock(categoryId);
+    }
+
+    async updateCategoryStock(categoryId) {
+        const stock = await this.getAvailableStock(categoryId);
+        await this.query(
+            'UPDATE categories SET stock = ? WHERE id = ?',
+            [stock, categoryId]
+        );
+        return stock;
+    }
+
+    async createOrder(userId, categoryId, categoryName, quantity, totalPrice, utr, screenshotId) {
+        const orderId = this.generateOrderId();
+        
+        // Check if UTR is blocked
+        const blocked = await this.query(
+            'SELECT * FROM blocked_utrs WHERE utr_number = ?',
+            [utr]
+        );
+        
+        if (blocked.length > 0) {
+            throw new Error('UTR_BLOCKED');
+        }
+        
+        // Set expiry time (2 hours from now)
+        const expiresAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+        
+        const result = await this.query(
+            `INSERT INTO orders 
+             (order_id, user_id, category_id, category_name, quantity, total_price, utr_number, screenshot_id, expires_at) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [orderId, userId, categoryId, categoryName, quantity, totalPrice, utr, screenshotId, expiresAt]
+        );
+        
+        return orderId;
+    }
+
+    generateOrderId() {
+        const timestamp = Date.now().toString(36).toUpperCase();
+        const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+        return `SVH-${timestamp}-${random}`;
+    }
+
+    async getOrder(orderId) {
+        const orders = await this.query(
+            'SELECT * FROM orders WHERE order_id = ?',
+            [orderId]
+        );
+        return orders[0];
+    }
+
+    async getUserOrders(userId, limit = 10) {
+        return this.query(
+            `SELECT * FROM orders 
+             WHERE user_id = ? 
+             ORDER BY created_at DESC 
+             LIMIT ?`,
+            [userId, limit]
+        );
+    }
+
+    async updateOrderStatus(orderId, status, adminNote = null) {
+        await this.query(
+            `UPDATE orders SET 
+             status = ?, 
+             admin_note = ?,
+             updated_at = NOW() 
+             WHERE order_id = ?`,
+            [status, adminNote, orderId]
+        );
+    }
+
+    async deliverOrder(orderId, adminId) {
+        const order = await this.getOrder(orderId);
+        if (!order) return false;
+        
+        // Get available codes
+        const codes = await this.getVoucherCodes(order.category_id, order.quantity);
+        
+        if (codes.length < order.quantity) {
+            return false;
+        }
+        
+        // Mark codes as used and assign to order
+        for (let i = 0; i < codes.length; i++) {
+            const code = codes[i];
+            await this.query(
+                `UPDATE voucher_codes SET 
+                 is_used = TRUE, 
+                 order_id = ?,
+                 used_by = ?,
+                 used_at = NOW() 
+                 WHERE id = ?`,
+                [orderId, order.user_id, code.id]
+            );
             
-            // Update user total spent
-            const user = data.users.find(u => u.id === order.userId);
-            if (user) {
-                user.totalSpent = (user.totalSpent || 0) + order.totalPrice;
-            }
+            // Save to order_codes
+            await this.query(
+                'INSERT INTO order_codes (order_id, code_id, code_text) VALUES (?, ?, ?)',
+                [orderId, code.id, code.code]
+            );
         }
         
-        if (adminNote) {
-            order.adminNote = adminNote;
-        }
+        // Update order status
+        await this.query(
+            `UPDATE orders SET 
+             status = 'success', 
+             delivered_at = NOW(),
+             updated_at = NOW() 
+             WHERE order_id = ?`,
+            [orderId]
+        );
         
-        saveData(data);
-        return true;
-    }
-    return false;
-}
-
-function updateOrderPayment(orderId, transactionId, screenshot) {
-    const data = loadData();
-    const order = data.orders.find(o => o.id === orderId);
-    
-    if (order) {
-        order.transactionId = transactionId;
-        order.screenshot = screenshot;
-        order.status = 'pending_approval';
-        order.updatedAt = new Date().toISOString();
-        saveData(data);
-        return true;
-    }
-    return false;
-}
-
-function canRecover(orderId, userId) {
-    const data = loadData();
-    const order = data.orders.find(o => o.id === orderId);
-    
-    if (!order) return { can: false, reason: 'not_found' };
-    if (order.userId !== userId) return { can: false, reason: 'wrong_user' };
-    if (order.status !== 'delivered') return { can: false, reason: 'not_delivered' };
-    
-    const now = new Date();
-    const expiry = new Date(order.deliveredAt || order.createdAt);
-    expiry.setHours(expiry.getHours() + 2);
-    
-    if (now > expiry) return { can: false, reason: 'expired' };
-    
-    return { can: true, order };
-}
-
-// ==================== SETTINGS FUNCTIONS ====================
-
-function getSetting(key) {
-    const data = loadData();
-    return data.settings[key];
-}
-
-function updateSetting(key, value) {
-    const data = loadData();
-    data.settings[key] = value;
-    saveData(data);
-    return true;
-}
-
-function getPaymentQR() {
-    const data = loadData();
-    return data.settings.payment_qr;
-}
-
-function updatePaymentQR(url) {
-    return updateSetting('payment_qr', url);
-}
-
-function getBotStatus() {
-    const data = loadData();
-    return data.settings.bot_status;
-}
-
-function toggleBotStatus() {
-    const current = getBotStatus();
-    return updateSetting('bot_status', current === 'active' ? 'inactive' : 'active');
-}
-
-function getChannel2Id() {
-    const data = loadData();
-    return data.settings.channel_2_id;
-}
-
-// ==================== STATS FUNCTIONS ====================
-
-function getDashboardStats() {
-    const data = loadData();
-    const users = data.users.length;
-    const activeUsers = data.users.filter(u => u.status === 'active').length;
-    const blockedUsers = data.blockedUsers.length;
-    
-    const orders = data.orders.length;
-    const pendingOrders = data.orders.filter(o => o.status === 'pending_approval' || o.status === 'pending').length;
-    const processingOrders = data.orders.filter(o => o.status === 'processing').length;
-    const completedOrders = data.orders.filter(o => o.status === 'delivered').length;
-    const rejectedOrders = data.orders.filter(o => o.status === 'rejected').length;
-    
-    const today = new Date().toDateString();
-    const todayOrders = data.orders.filter(o => new Date(o.createdAt).toDateString() === today).length;
-    const todayRevenue = data.orders
-        .filter(o => o.status === 'delivered' && new Date(o.createdAt).toDateString() === today)
-        .reduce((sum, o) => sum + o.totalPrice, 0);
-    
-    const categories = data.categories.length;
-    const totalStock = data.categories.reduce((sum, c) => sum + (c.stock || 0), 0);
-    const totalSold = data.categories.reduce((sum, c) => sum + (c.sold || 0), 0);
-    
-    const vouchers = data.vouchers.length;
-    const availableVouchers = data.vouchers.filter(v => v.status === 'available').length;
-    
-    return {
-        users, activeUsers, blockedUsers,
-        orders, pendingOrders, processingOrders, completedOrders, rejectedOrders,
-        todayOrders, todayRevenue,
-        totalRevenue: data.stats.totalRevenue || 0,
-        categories, totalStock, totalSold,
-        vouchers, availableVouchers
-    };
-}
-
-// ==================== CLEANUP FUNCTION ====================
-
-function cleanupExpiredOrders() {
-    const data = loadData();
-    const now = new Date();
-    let cleaned = 0;
-    
-    data.orders = data.orders.filter(order => {
-        // রাখবে যদি order delivered বা rejected হয়, অথবা ৭ দিনের কম পুরনো হয়
-        const keep = order.status === 'delivered' || 
-                    order.status === 'rejected' ||
-                    (new Date(order.createdAt) > new Date(now - 7 * 24 * 60 * 60 * 1000));
+        // Update user stats
+        await this.query(
+            `UPDATE users SET 
+             total_orders = total_orders + 1,
+             total_spent = total_spent + ? 
+             WHERE telegram_id = ?`,
+            [order.total_price, order.user_id]
+        );
         
-        if (!keep) cleaned++;
-        return keep;
-    });
-    
-    if (cleaned > 0) {
-        data.stats.totalOrders = data.orders.length;
-        saveData(data);
+        // Update category stock
+        await this.updateCategoryStock(order.category_id);
+        
+        return codes.map(c => c.code);
     }
-    
-    return cleaned;
+
+    async getDeliveredCodes(orderId) {
+        const codes = await this.query(
+            'SELECT code_text FROM order_codes WHERE order_id = ?',
+            [orderId]
+        );
+        return codes.map(c => c.code_text);
+    }
+
+    async blockUTR(utr, reason, blockedBy) {
+        await this.query(
+            'INSERT INTO blocked_utrs (utr_number, reason, blocked_by) VALUES (?, ?, ?)',
+            [utr, reason, blockedBy]
+        );
+    }
+
+    async isUTRBlocked(utr) {
+        const result = await this.query(
+            'SELECT * FROM blocked_utrs WHERE utr_number = ?',
+            [utr]
+        );
+        return result.length > 0;
+    }
+
+    async createSupportTicket(userId, message, fileId = null) {
+        const ticketId = `TKT-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        
+        const result = await this.query(
+            `INSERT INTO support_tickets (ticket_id, user_id, message, file_id) 
+             VALUES (?, ?, ?, ?)`,
+            [ticketId, userId, message, fileId]
+        );
+        
+        return ticketId;
+    }
+
+    async getSupportTickets(status = 'open') {
+        return this.query(
+            `SELECT t.*, u.username, u.first_name 
+             FROM support_tickets t
+             JOIN users u ON t.user_id = u.telegram_id
+             WHERE t.status = ?
+             ORDER BY t.created_at DESC`,
+            [status]
+        );
+    }
+
+    async replyToTicket(ticketId, reply, adminId) {
+        await this.query(
+            `UPDATE support_tickets SET 
+             status = 'replied',
+             admin_reply = ?,
+             replied_by = ?,
+             updated_at = NOW() 
+             WHERE ticket_id = ?`,
+            [reply, adminId, ticketId]
+        );
+    }
+
+    async closeTicket(ticketId) {
+        await this.query(
+            `UPDATE support_tickets SET 
+             status = 'closed',
+             updated_at = NOW() 
+             WHERE ticket_id = ?`,
+            [ticketId]
+        );
+    }
+
+    async getSetting(key) {
+        const settings = await this.query(
+            'SELECT setting_value FROM settings WHERE setting_key = ?',
+            [key]
+        );
+        return settings[0]?.setting_value;
+    }
+
+    async updateSetting(key, value) {
+        await this.query(
+            `INSERT INTO settings (setting_key, setting_value) 
+             VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`,
+            [key, value]
+        );
+    }
+
+    async getStats() {
+        const stats = {};
+        
+        // Total users
+        const users = await this.query('SELECT COUNT(*) as count FROM users');
+        stats.totalUsers = users[0].count;
+        
+        // Active users (last 24h)
+        const active = await this.query(
+            'SELECT COUNT(*) as count FROM users WHERE last_active > DATE_SUB(NOW(), INTERVAL 24 HOUR)'
+        );
+        stats.activeUsers = active[0].count;
+        
+        // Total orders
+        const orders = await this.query('SELECT COUNT(*) as count FROM orders');
+        stats.totalOrders = orders[0].count;
+        
+        // Orders by status
+        const pending = await this.query("SELECT COUNT(*) as count FROM orders WHERE status = 'pending'");
+        stats.pendingOrders = pending[0].count;
+        
+        const success = await this.query("SELECT COUNT(*) as count FROM orders WHERE status = 'success'");
+        stats.successOrders = success[0].count;
+        
+        const rejected = await this.query("SELECT COUNT(*) as count FROM orders WHERE status = 'rejected'");
+        stats.rejectedOrders = rejected[0].count;
+        
+        // Total revenue
+        const revenue = await this.query("SELECT SUM(total_price) as total FROM orders WHERE status = 'success'");
+        stats.totalRevenue = revenue[0].total || 0;
+        
+        // Total stock
+        const stock = await this.query('SELECT SUM(stock) as total FROM categories WHERE is_active = TRUE');
+        stats.totalStock = stock[0].total || 0;
+        
+        return stats;
+    }
+
+    async getBlockedUsers() {
+        return this.query(
+            'SELECT telegram_id, username, first_name, block_reason, block_until FROM users WHERE is_blocked = TRUE'
+        );
+    }
+
+    async getAllUsers() {
+        return this.query('SELECT telegram_id, username, first_name, last_active, total_orders FROM users ORDER BY joined_at DESC');
+    }
+
+    async expireOldOrders() {
+        await this.query(
+            `UPDATE orders SET status = 'expired' 
+             WHERE status = 'pending' AND expires_at < NOW()`
+        );
+    }
+
+    async cleanupExpiredRecoveries() {
+        // This will be used for recovery expiry
+        await this.expireOldOrders();
+    }
 }
 
-// ==================== EXPORT ====================
-
-module.exports = {
-    initDatabase,
-    // User
-    addUser,
-    getUser,
-    getAllUsers,
-    blockUser,
-    unblockUser,
-    isUserBlocked,
-    getBlockedUsers,
-    addWarning,
-    
-    // Category
-    getCategories,
-    getCategory,
-    addCategory,
-    updateCategoryPrice,
-    updateCategoryStock,
-    deleteCategory,
-    getPriceForQuantity,
-    calculateTotalPrice,
-    
-    // Voucher
-    getVouchers,
-    getAvailableVouchers,
-    getAvailableVouchersCount,
-    addVoucher,
-    bulkAddVouchers,
-    deleteVoucher,
-    deleteVouchersByCategory,
-    assignVoucher,
-    
-    // UTR
-    isUTRUsed,
-    addUsedUTR,
-    
-    // Order
-    createOrder,
-    getOrder,
-    getUserOrders,
-    getAllOrders,
-    updateOrderStatus,
-    updateOrderPayment,
-    canRecover,
-    
-    // Settings
-    getSetting,
-    updateSetting,
-    getPaymentQR,
-    updatePaymentQR,
-    getBotStatus,
-    toggleBotStatus,
-    getChannel2Id,
-    
-    // Stats
-    getDashboardStats,
-    
-    // Cleanup
-    cleanupExpiredOrders
-};
+module.exports = new Database();
