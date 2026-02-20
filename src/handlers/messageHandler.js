@@ -1,10 +1,10 @@
 const { startCommand } = require('../commands/start');
-const { adminCommand, handleAdminText, isAdminMode } = require('../commands/admin');
-const { 
-    buyVouchers, myOrders, recoverVouchers, support, disclaimer,
-    handleRecovery, handleScreenshot, userState
-} = require('../commands/user');
+const { adminCommand, handleAdminText } = require('../commands/admin');
+const userCommands = require('../commands/user');
+const paymentHandler = require('./paymentHandler');
 const db = require('../database/database');
+
+let userState = userCommands.userState;
 
 async function messageHandler(bot, msg) {
     const chatId = msg.chat.id;
@@ -18,7 +18,6 @@ async function messageHandler(bot, msg) {
         const handled = await handleAdminText(bot, msg);
         if (handled) return;
         
-        // Admin silent ignore
         return;
     }
     
@@ -60,35 +59,113 @@ async function messageHandler(bot, msg) {
     
     // Handle quantity input
     if (userState[userId]?.step === 'awaiting_qty') {
-        const qty = parseInt(text);
-        const state = userState[userId];
-        
-        if (isNaN(qty) || qty < 1 || qty > state.availableVouchers) {
-            return bot.sendMessage(chatId, `❌ Please enter a valid quantity (1-${state.availableVouchers}):`);
-        }
-        
-        delete userState[userId].step;
-        const { selectQuantity } = require('../commands/user');
-        return selectQuantity(bot, chatId, userId, qty.toString());
+        return userCommands.handleCustomQuantity(bot, chatId, userId, text);
     }
     
     // Handle recovery input
     if (userState[userId]?.step === 'awaiting_recovery') {
-        return handleRecovery(bot, msg);
+        return userCommands.handleRecovery(bot, msg);
     }
     
     // ==================== MAIN MENU COMMANDS ====================
     switch(text) {
         case '/start': return startCommand(bot, msg);
-        case '🛒 Buy Vouchers': return buyVouchers(bot, msg);
-        case '📦 My Orders': return myOrders(bot, msg);
-        case '🔁 Recover Vouchers': return recoverVouchers(bot, msg);
-        case '🆘 Support': return support(bot, msg);
-        case '📜 Disclaimer': return disclaimer(bot, msg);
+        case '🛒 Buy Vouchers': return userCommands.buyVouchers(bot, msg);
+        case '📦 My Orders': return userCommands.myOrders(bot, msg);
+        case '🔁 Recover Vouchers': return userCommands.recoverVouchers(bot, msg);
+        case '🆘 Support': return userCommands.support(bot, msg);
+        case '📜 Disclaimer': return userCommands.disclaimer(bot, msg);
         case '← Back to Menu':
         case '← Back':
             return startCommand(bot, msg);
-        default: return; // Silent ignore
+        default: return;
+    }
+}
+
+// ==================== SCREENSHOT HANDLER ====================
+async function handleScreenshot(bot, msg) {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const text = msg.text;
+    
+    console.log('handleScreenshot called with step:', userState[userId]?.step);
+    
+    // যদি ফটো আসে
+    if (msg.photo) {
+        console.log('Photo received');
+        const photo = msg.photo[msg.photo.length - 1];
+        const fileId = photo.file_id;
+        
+        userState[userId] = {
+            ...userState[userId],
+            screenshot: fileId,
+            step: 'awaiting_utr'
+        };
+        
+        await bot.sendMessage(chatId, '📝 **Enter UTR/Transaction ID**\n\nExample: `UTR123456789`', {
+            parse_mode: 'Markdown',
+            reply_markup: { force_reply: true }
+        });
+        return;
+    }
+    
+    // যদি UTR এর জন্য অপেক্ষা করছে
+    if (userState[userId]?.step === 'awaiting_utr') {
+        console.log('Awaiting UTR, received text:', text);
+        const state = userState[userId];
+        
+        // যদি ইউজার /start দেয়
+        if (text === '/start') {
+            console.log('User sent /start, clearing state');
+            delete userState[userId];
+            const { startCommand } = require('../commands/start');
+            return startCommand(bot, msg);
+        }
+        
+        // যদি ইউজার ব্যাক বলে
+        if (text === '← Back' || text === '← Back to Menu' || text === 'Back' || text === 'back') {
+            console.log('User sent back command, clearing state');
+            delete userState[userId];
+            const { startCommand } = require('../commands/start');
+            return startCommand(bot, msg);
+        }
+        
+        // UTR প্রসেস করুন
+        const utr = text.trim().toUpperCase();
+        
+        if (!state || !state.orderId) {
+            console.error('No orderId in state:', state);
+            delete userState[userId];
+            return bot.sendMessage(chatId, '❌ **Error: Order not found!** Please start over.', {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    keyboard: [['← Back to Menu']],
+                    resize_keyboard: true
+                }
+            });
+        }
+        
+        const result = await paymentHandler.processUTR(utr, state.orderId, userId, state.screenshot, bot, chatId, state);
+        
+        if (!result.success) {
+            return bot.sendMessage(chatId, result.message, {
+                parse_mode: 'Markdown',
+                reply_markup: { force_reply: true }
+            });
+        }
+        
+        await bot.sendMessage(chatId, result.message, { parse_mode: 'Markdown' });
+        
+        await paymentHandler.notifyAdmin(bot, state.orderId, userId, result.utr, state.screenshot);
+        
+        delete userState[userId];
+        
+        setTimeout(async () => {
+            const { startCommand } = require('../commands/start');
+            await startCommand(bot, { chat: { id: chatId }, from: { id: userId } });
+        }, 5000);
+        
+        return;
     }
 }
 
