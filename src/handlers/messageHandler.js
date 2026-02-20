@@ -1,172 +1,107 @@
-const { startCommand } = require('../commands/start');
-const { adminCommand, handleAdminText } = require('../commands/admin');
-const userCommands = require('../commands/user');
-const paymentHandler = require('./paymentHandler');
 const db = require('../database/database');
+const buyVoucher = require('../commands/user/buyVoucher');
+const recoverVoucher = require('../commands/user/recoverVoucher');
+const support = require('../commands/user/support');
+const adminCommand = require('../commands/admin');
 
-let userState = userCommands.userState;
-
-async function messageHandler(bot, msg) {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const text = msg.text;
+module.exports = async (ctx) => {
+  try {
+    const text = ctx.message.text;
+    const userId = ctx.from.id;
     
-    // ==================== ADMIN HANDLER ====================
+    // Update user activity
+    await db.updateUserActivity(userId);
+    
+    // Check if user is blocked
+    const isBlocked = await db.isUserBlocked(userId);
+    if (isBlocked) {
+      if (text === '🆘 Support') {
+        return support(ctx);
+      }
+      
+      const user = await db.getUser(userId);
+      let blockMsg = '🚫 You are blocked from using this bot.\n\n';
+      if (user?.block_reason) {
+        blockMsg += `Reason: ${user.block_reason}\n`;
+      }
+      if (user?.block_until) {
+        blockMsg += `Until: ${new Date(user.block_until).toLocaleString()}\n`;
+      }
+      blockMsg += '\nContact support: @SheinSupportRobot';
+      
+      return ctx.reply(blockMsg, {
+        reply_markup: {
+          keyboard: [[{ text: '🆘 Support' }]],
+          resize_keyboard: true
+        }
+      });
+    }
+    
+    // Admin message handling
     if (userId.toString() === process.env.ADMIN_ID) {
-        if (text === '/admin') return adminCommand(bot, msg);
-        
-        const handled = await handleAdminText(bot, msg);
-        if (handled) return;
-        
+      // Handle admin reply to ticket
+      if (ctx.session?.replyingToTicket) {
+        const ticketId = ctx.session.replyingToTicket;
+        const replied = await support.handleAdminReply(ctx, ticketId, text);
+        if (replied) {
+          ctx.session = { ...ctx.session, replyingToTicket: null };
+          await ctx.reply('✅ Reply sent to user');
+        }
         return;
-    }
-    
-    // ==================== CHECK BLOCKED ====================
-    if (db.isUserBlocked(userId)) {
-        const blocked = db.getBlockedUsers().find(b => b.id === userId);
-        let msgText = '⛔ **You are blocked!**\n';
+      }
+      
+      // Handle admin block user
+      if (ctx.session?.blockingUser) {
+        const targetUserId = ctx.session.blockingUser;
+        const parts = text.split(' ');
+        const reason = parts.slice(0, -1).join(' ') || 'No reason';
+        const minutes = parseInt(parts[parts.length - 1]) || null;
         
-        if (blocked?.expiresAt) {
-            const expiry = new Date(blocked.expiresAt);
-            msgText += `\n**Reason:** ${blocked.reason}\n**Expires:** ${expiry.toLocaleString()}`;
-        } else {
-            msgText += `\n**Reason:** ${blocked?.reason || 'Violation of rules'}`;
-        }
+        await db.blockUser(targetUserId, reason, minutes);
+        ctx.session = { ...ctx.session, blockingUser: null };
         
-        msgText += `\n\nContact ${process.env.SUPPORT_BOT} for appeal.`;
-        
-        return bot.sendMessage(chatId, msgText, {
-            parse_mode: 'Markdown',
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '🆘 Contact Support', url: `https://t.me/${process.env.SUPPORT_BOT.replace('@', '')}` }]
-                ]
-            }
-        });
-    }
-    
-    // ==================== BOT STATUS ====================
-    if (db.getBotStatus() !== 'active') {
-        return bot.sendMessage(chatId, '⚠️ Bot is under maintenance. Please try again later.');
-    }
-    
-    // ==================== USER STATE HANDLERS ====================
-    
-    // Handle screenshot upload
-    if (msg.photo || userState[userId]?.step === 'awaiting_utr') {
-        return handleScreenshot(bot, msg);
-    }
-    
-    // Handle quantity input
-    if (userState[userId]?.step === 'awaiting_qty') {
-        return userCommands.handleCustomQuantity(bot, chatId, userId, text);
-    }
-    
-    // Handle recovery input
-    if (userState[userId]?.step === 'awaiting_recovery') {
-        return userCommands.handleRecovery(bot, msg);
-    }
-    
-    // ==================== MAIN MENU COMMANDS ====================
-    switch(text) {
-        case '/start': return startCommand(bot, msg);
-        case '🛒 Buy Vouchers': return userCommands.buyVouchers(bot, msg);
-        case '📦 My Orders': return userCommands.myOrders(bot, msg);
-        case '🔁 Recover Vouchers': return userCommands.recoverVouchers(bot, msg);
-        case '🆘 Support': return userCommands.support(bot, msg);
-        case '📜 Disclaimer': return userCommands.disclaimer(bot, msg);
-        case '← Back to Menu':
-        case '← Back':
-            return startCommand(bot, msg);
-        default: return;
-    }
-}
-
-// ==================== SCREENSHOT HANDLER ====================
-async function handleScreenshot(bot, msg) {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const text = msg.text;
-    
-    console.log('handleScreenshot called with step:', userState[userId]?.step);
-    
-    // যদি ফটো আসে
-    if (msg.photo) {
-        console.log('Photo received');
-        const photo = msg.photo[msg.photo.length - 1];
-        const fileId = photo.file_id;
-        
-        userState[userId] = {
-            ...userState[userId],
-            screenshot: fileId,
-            step: 'awaiting_utr'
-        };
-        
-        await bot.sendMessage(chatId, '📝 **Enter UTR/Transaction ID**\n\nExample: `UTR123456789`', {
-            parse_mode: 'Markdown',
-            reply_markup: { force_reply: true }
-        });
+        await ctx.reply(`✅ User ${targetUserId} blocked\nReason: ${reason}${minutes ? `\nDuration: ${minutes} minutes` : ''}`);
         return;
+      }
+      
+      // Handle admin broadcast
+      if (ctx.session?.broadcasting) {
+        await adminCommand.handleBroadcastSend(ctx, text);
+        return;
+      }
     }
     
-    // যদি UTR এর জন্য অপেক্ষা করছে
-    if (userState[userId]?.step === 'awaiting_utr') {
-        console.log('Awaiting UTR, received text:', text);
-        const state = userState[userId];
-        
-        // যদি ইউজার /start দেয়
-        if (text === '/start') {
-            console.log('User sent /start, clearing state');
-            delete userState[userId];
-            const { startCommand } = require('../commands/start');
-            return startCommand(bot, msg);
+    // Handle custom quantity input
+    const handled = await buyVoucher.handleCustomQuantity(ctx, text);
+    if (handled) return;
+    
+    // Handle recovery order ID
+    const recovered = await recoverVoucher.handleOrderId(ctx, text);
+    if (recovered) return;
+    
+    // Handle support message
+    const supported = await support.handleMessage(ctx, text);
+    if (supported) return;
+    
+    // If no handler matched, show help message
+    await ctx.reply(
+      '❓ *Unknown Command*\n\n' +
+      'Please use the buttons below to navigate:',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [
+            [{ text: '🛒 Buy Voucher' }, { text: '🔁 Recover Vouchers' }],
+            [{ text: '📦 My Orders' }, { text: '📜 Disclaimer' }],
+            [{ text: '🆘 Support' }]
+          ],
+          resize_keyboard: true
         }
-        
-        // যদি ইউজার ব্যাক বলে
-        if (text === '← Back' || text === '← Back to Menu' || text === 'Back' || text === 'back') {
-            console.log('User sent back command, clearing state');
-            delete userState[userId];
-            const { startCommand } = require('../commands/start');
-            return startCommand(bot, msg);
-        }
-        
-        // UTR প্রসেস করুন
-        const utr = text.trim().toUpperCase();
-        
-        if (!state || !state.orderId) {
-            console.error('No orderId in state:', state);
-            delete userState[userId];
-            return bot.sendMessage(chatId, '❌ **Error: Order not found!** Please start over.', {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                    keyboard: [['← Back to Menu']],
-                    resize_keyboard: true
-                }
-            });
-        }
-        
-        const result = await paymentHandler.processUTR(utr, state.orderId, userId, state.screenshot, bot, chatId, state);
-        
-        if (!result.success) {
-            return bot.sendMessage(chatId, result.message, {
-                parse_mode: 'Markdown',
-                reply_markup: { force_reply: true }
-            });
-        }
-        
-        await bot.sendMessage(chatId, result.message, { parse_mode: 'Markdown' });
-        
-        await paymentHandler.notifyAdmin(bot, state.orderId, userId, result.utr, state.screenshot);
-        
-        delete userState[userId];
-        
-        setTimeout(async () => {
-            const { startCommand } = require('../commands/start');
-            await startCommand(bot, { chat: { id: chatId }, from: { id: userId } });
-        }, 5000);
-        
-        return;
-    }
-}
-
-module.exports = { messageHandler };
+      }
+    );
+    
+  } catch (error) {
+    console.error('Message handler error:', error);
+    ctx.reply('An error occurred. Please try again later.').catch(() => {});
+  }
+};
