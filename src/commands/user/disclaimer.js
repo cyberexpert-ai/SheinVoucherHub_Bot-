@@ -1,3 +1,7 @@
+/**
+ * Disclaimer Handler
+ */
+
 module.exports = async (ctx) => {
   try {
     const disclaimer = 
@@ -6,8 +10,7 @@ module.exports = async (ctx) => {
       '• Contact Support if you\'re facing any issue with vouchers.\n\n' +
       '• Only replacements are allowed if support ticket is raised within 1–2 hours of voucher delivery.\n\n' +
       '• No returns.\n\n' +
-      '• Refund will be only given if vouchers are out of stock.\n\n' +
-      '• By using this bot, you agree to these terms.';
+      '• Refund will be only given if vouchers are out of stock.';
     
     await ctx.reply(disclaimer, {
       parse_mode: 'Markdown',
