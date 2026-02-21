@@ -1,8 +1,15 @@
+/**
+ * Message Handler
+ * Location: /src/handlers/messageHandler.js
+ */
+
 const db = require('../database/database');
 const buyVoucher = require('../commands/user/buyVoucher');
 const recoverVoucher = require('../commands/user/recoverVoucher');
 const support = require('../commands/user/support');
 const adminCommand = require('../commands/admin');
+const backCommand = require('../commands/user/back');
+const paymentHandler = require('./paymentHandler');
 
 module.exports = async (ctx) => {
   try {
@@ -35,6 +42,26 @@ module.exports = async (ctx) => {
           resize_keyboard: true
         }
       });
+    }
+    
+    // Handle BACK button explicitly
+    if (text === '↩️ Back') {
+      console.log('🔙 Back button pressed by user:', userId);
+      
+      // Clear all sessions
+      if (buyVoucher.userSessions) buyVoucher.userSessions.delete(userId);
+      if (recoverVoucher.recoverySessions) recoverVoucher.recoverySessions.delete(userId);
+      if (support.supportSessions) support.supportSessions.delete(userId);
+      if (paymentHandler.clearSession) paymentHandler.clearSession(userId);
+      
+      // Call back command
+      return backCommand(ctx);
+    }
+    
+    // Handle LEAVE button
+    if (text === '⬅️ Leave') {
+      const leaveCommand = require('../commands/user/leave');
+      return leaveCommand(ctx);
     }
     
     // Admin message handling
@@ -71,6 +98,10 @@ module.exports = async (ctx) => {
       }
     }
     
+    // Handle UTR input (payment)
+    const utrHandled = await paymentHandler.handleUTR(ctx, text);
+    if (utrHandled) return;
+    
     // Handle custom quantity input
     const handled = await buyVoucher.handleCustomQuantity(ctx, text);
     if (handled) return;
@@ -85,7 +116,7 @@ module.exports = async (ctx) => {
     
     // If no handler matched, show help message
     await ctx.reply(
-      '❓ *Unknown Command*\n\n' +
+      '❓ *UNKNOWN COMMAND*\n\n' +
       'Please use the buttons below to navigate:',
       {
         parse_mode: 'Markdown',
@@ -102,6 +133,6 @@ module.exports = async (ctx) => {
     
   } catch (error) {
     console.error('Message handler error:', error);
-    ctx.reply('An error occurred. Please try again later.').catch(() => {});
+    ctx.reply('❌ An error occurred. Please try again later.').catch(() => {});
   }
 };
