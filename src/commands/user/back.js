@@ -1,6 +1,5 @@
 /**
  * Back Command Handler
- * Location: /src/commands/user/back.js
  * Returns user to main menu
  */
 
@@ -8,38 +7,33 @@ const db = require('../../database/database');
 
 module.exports = async (ctx) => {
   try {
-    console.log('🔙 Executing back command for user:', ctx.from.id);
+    console.log('🔙 Back button pressed by user:', ctx.from.id);
     
     // Clear any active sessions
     const userId = ctx.from.id;
     
-    // Clear from various session maps
-    const buyVoucher = require('./buyVoucher');
-    const recoverVoucher = require('./recoverVoucher');
-    const support = require('./support');
-    const paymentHandler = require('../../handlers/paymentHandler');
+    // Try to clear sessions if they exist
+    try {
+      const buyVoucher = require('./buyVoucher');
+      if (buyVoucher.userSessions) buyVoucher.userSessions.delete(userId);
+    } catch (e) {}
     
-    if (buyVoucher.userSessions) {
-      buyVoucher.userSessions.delete(userId);
-      console.log('✅ Cleared buy voucher session');
-    }
+    try {
+      const recoverVoucher = require('./recoverVoucher');
+      if (recoverVoucher.recoverySessions) recoverVoucher.recoverySessions.delete(userId);
+    } catch (e) {}
     
-    if (recoverVoucher.recoverySessions) {
-      recoverVoucher.recoverySessions.delete(userId);
-      console.log('✅ Cleared recovery session');
-    }
+    try {
+      const support = require('./support');
+      if (support.supportSessions) support.supportSessions.delete(userId);
+    } catch (e) {}
     
-    if (support.supportSessions) {
-      support.supportSessions.delete(userId);
-      console.log('✅ Cleared support session');
-    }
+    try {
+      const paymentHandler = require('../../handlers/paymentHandler');
+      if (paymentHandler.clearSession) paymentHandler.clearSession(userId);
+    } catch (e) {}
     
-    if (paymentHandler.clearSession) {
-      paymentHandler.clearSession(userId);
-      console.log('✅ Cleared payment session');
-    }
-    
-    // Get welcome message from settings
+    // Get welcome message
     const welcomeMessage = await db.getSetting('welcome_message') || 
       '🎯 *Welcome to Shein Voucher Hub!*\n\n' +
       '🚀 Get exclusive Shein vouchers at the best prices!\n\n' +
@@ -58,29 +52,23 @@ module.exports = async (ctx) => {
       }
     });
     
-    console.log('✅ Back to main menu for user:', userId);
-    
   } catch (error) {
     console.error('Back command error:', error);
     
     // Fallback main menu
-    try {
-      await ctx.reply(
-        '📌 *Main Menu*',
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            keyboard: [
-              [{ text: '🛒 Buy Voucher' }, { text: '🔁 Recover Vouchers' }],
-              [{ text: '📦 My Orders' }, { text: '📜 Disclaimer' }],
-              [{ text: '🆘 Support' }]
-            ],
-            resize_keyboard: true
-          }
+    await ctx.reply(
+      '📌 *Main Menu*',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [
+            [{ text: '🛒 Buy Voucher' }, { text: '🔁 Recover Vouchers' }],
+            [{ text: '📦 My Orders' }, { text: '📜 Disclaimer' }],
+            [{ text: '🆘 Support' }]
+          ],
+          resize_keyboard: true
         }
-      );
-    } catch (e) {
-      console.error('Fallback menu error:', e);
-    }
+      }
+    );
   }
 };
