@@ -12,7 +12,15 @@ const paymentHandler = require('./handlers/paymentHandler');
 // Import commands
 const startCommand = require('./commands/start');
 const adminCommand = require('./commands/admin');
-const userCommands = require('./commands/user');
+
+// Import user commands individually to avoid any undefined issues
+const buyVoucher = require('./commands/user/buyVoucher');
+const myOrders = require('./commands/user/myOrders');
+const recoverVoucher = require('./commands/user/recoverVoucher');
+const support = require('./commands/user/support');
+const disclaimer = require('./commands/user/disclaimer');
+const back = require('./commands/user/back');
+const leave = require('./commands/user/leave');
 
 // Initialize bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
@@ -42,26 +50,6 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString(),
     bot: 'running'
   });
-});
-
-// Database check
-app.get('/db-check', async (req, res) => {
-  try {
-    await db.query('SELECT 1');
-    res.json({ status: 'Database connected' });
-  } catch (error) {
-    res.status(500).json({ status: 'Database error', error: error.message });
-  }
-});
-
-// Stats endpoint
-app.get('/stats', async (req, res) => {
-  try {
-    const stats = await db.getStats();
-    res.json(stats);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
 });
 
 // Middleware to check channel membership for all commands except /start
@@ -99,20 +87,20 @@ bot.use(async (ctx, next) => {
 bot.start(startCommand);
 bot.command('admin', adminCommand);
 
-// Register user command handlers
-bot.hears('🛒 Buy Voucher', userCommands.buyVoucher);
-bot.hears('🔁 Recover Vouchers', userCommands.recoverVoucher);
-bot.hears('📦 My Orders', userCommands.myOrders);
-bot.hears('📜 Disclaimer', userCommands.disclaimer);
-bot.hears('🆘 Support', userCommands.support);
-bot.hears('↩️ Back', userCommands.back);
-bot.hears('⬅️ Leave', userCommands.leave);
+// Register user command handlers - Direct function references
+bot.hears('🛒 Buy Voucher', (ctx) => buyVoucher(ctx));
+bot.hears('🔁 Recover Vouchers', (ctx) => recoverVoucher(ctx));
+bot.hears('📦 My Orders', (ctx) => myOrders(ctx));
+bot.hears('📜 Disclaimer', (ctx) => disclaimer(ctx));
+bot.hears('🆘 Support', (ctx) => support(ctx));
+bot.hears('↩️ Back', (ctx) => back(ctx));
+bot.hears('⬅️ Leave', (ctx) => leave(ctx));
 
 // Handle callback queries
 bot.on('callback_query', callbackHandler);
 
 // Handle photo messages (payment screenshots)
-bot.on('photo', paymentHandler.handleScreenshot);
+bot.on('photo', (ctx) => paymentHandler.handleScreenshot(ctx));
 
 // Handle text messages
 bot.on('text', messageHandler);
