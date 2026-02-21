@@ -1,11 +1,12 @@
+/**
+ * My Orders Handler
+ */
+
 const db = require('../../database/database');
-const { Markup } = require('telegraf');
 
 module.exports = async (ctx) => {
   try {
     const userId = ctx.from.id;
-    
-    // Get user orders
     const orders = await db.getUserOrders(userId, 10);
     
     if (!orders || orders.length === 0) {
@@ -30,20 +31,7 @@ module.exports = async (ctx) => {
       message += 
         `${statusEmoji} *${order.order_id}*\n` +
         `🎟 ${order.category_name} | Qty ${order.quantity}\n` +
-        `💰 ₹${order.total_price} | ${order.status.toUpperCase()}\n`;
-      
-      // If order is successful, show voucher codes
-      if (order.status === 'success') {
-        const codes = await db.getDeliveredCodes(order.order_id);
-        if (codes && codes.length > 0) {
-          message += `🔑 Codes:\n`;
-          codes.forEach((code, index) => {
-            message += `   ${index + 1}. \`${code}\`\n`;
-          });
-        }
-      }
-      
-      message += '\n';
+        `💰 ₹${order.total_price} | ${order.status.toUpperCase()}\n\n`;
     }
     
     await ctx.reply(message, {
