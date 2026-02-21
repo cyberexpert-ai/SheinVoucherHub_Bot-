@@ -3,153 +3,281 @@ const express = require('express');
 require('dotenv').config();
 
 const db = require('./database/database');
-const channelCheck = require('./middlewares/channelCheck');
-const auth = require('./middlewares/auth');
-const messageHandler = require('./handlers/messageHandler');
-const callbackHandler = require('./handlers/callbackHandler');
-const paymentHandler = require('./handlers/paymentHandler');
-
-// Import commands
-const startCommand = require('./commands/start');
-const adminCommand = require('./commands/admin');
-
-// Import user commands individually to avoid any undefined issues
-const buyVoucher = require('./commands/user/buyVoucher');
-const myOrders = require('./commands/user/myOrders');
-const recoverVoucher = require('./commands/user/recoverVoucher');
-const support = require('./commands/user/support');
-const disclaimer = require('./commands/user/disclaimer');
-const back = require('./commands/user/back');
-const leave = require('./commands/user/leave');
 
 // Initialize bot
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// Session middleware
-bot.use(session());
-
-// Express server for uptime
+// Express server
 const app = express();
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// Root route
 app.get('/', (req, res) => {
-  res.status(200).send(`
-    <h1>🤖 SheinVoucherHub Bot</h1>
-    <p>Status: <span style="color: green; font-weight: bold;">RUNNING</span></p>
-    <p>Version: 1.0.0</p>
-    <p>Last Updated: ${new Date().toLocaleString()}</p>
-  `);
+  res.status(200).send('Bot is running');
 });
 
-// Health check
 app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    status: 'OK', 
-    timestamp: new Date().toISOString(),
-    bot: 'running'
-  });
+  res.status(200).send('OK');
 });
 
-// Middleware to check channel membership for all commands except /start
-bot.use(async (ctx, next) => {
-  // Skip for /start command and verify callbacks
-  if (ctx.message?.text === '/start' || ctx.callbackQuery?.data?.startsWith('verify_')) {
-    return next();
-  }
-  
-  // Check if user is blocked
-  const isBlocked = await db.isUserBlocked(ctx.from.id);
-  if (isBlocked) {
-    const user = await db.getUser(ctx.from.id);
-    let blockMsg = '🚫 You are blocked from using this bot.\n\n';
-    if (user?.block_reason) {
-      blockMsg += `Reason: ${user.block_reason}\n`;
-    }
-    if (user?.block_until) {
-      blockMsg += `Until: ${new Date(user.block_until).toLocaleString()}\n`;
-    }
-    blockMsg += '\nContact support: @SheinSupportRobot';
+// মিডলওয়্যার - সব মেসেজ প্রিন্ট করুন (ডিবাগিং এর জন্য)
+bot.use((ctx, next) => {
+  console.log('📩 Message received:', ctx.message?.text || 'callback query');
+  return next();
+});
+
+// Start command
+bot.start(async (ctx) => {
+  try {
+    console.log('✅ /start command received from:', ctx.from.id);
     
-    return ctx.reply(blockMsg, {
+    await ctx.reply(
+      '🎯 *Welcome to Shein Voucher Hub!*\n\n' +
+      'Choose an option below:',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [
+            [{ text: '🛒 Buy Voucher' }, { text: '🔁 Recover Vouchers' }],
+            [{ text: '📦 My Orders' }, { text: '📜 Disclaimer' }],
+            [{ text: '🆘 Support' }]
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+  } catch (error) {
+    console.error('Start command error:', error);
+    ctx.reply('An error occurred. Please try again later.');
+  }
+});
+
+// Buy Voucher
+bot.hears('🛒 Buy Voucher', async (ctx) => {
+  try {
+    console.log('🛒 Buy Voucher pressed');
+    await ctx.reply('Select voucher type:', {
       reply_markup: {
-        keyboard: [[{ text: '🆘 Support' }]],
+        inline_keyboard: [
+          [{ text: '₹500 Voucher', callback_data: 'buy_500' }],
+          [{ text: '₹1000 Voucher', callback_data: 'buy_1000' }],
+          [{ text: '₹2000 Voucher', callback_data: 'buy_2000' }],
+          [{ text: '₹4000 Voucher', callback_data: 'buy_4000' }],
+          [{ text: '↩️ Back', callback_data: 'back_main' }]
+        ]
+      }
+    });
+  } catch (error) {
+    console.error('Buy voucher error:', error);
+    ctx.reply('An error occurred. Please try again later.');
+  }
+});
+
+// Recover Vouchers
+bot.hears('🔁 Recover Vouchers', async (ctx) => {
+  try {
+    console.log('🔁 Recover Vouchers pressed');
+    await ctx.reply('🔁 *Recover Vouchers*\n\nSend your Order ID:', {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        keyboard: [[{ text: '↩️ Back' }]],
         resize_keyboard: true
       }
     });
+  } catch (error) {
+    console.error('Recover error:', error);
+    ctx.reply('An error occurred. Please try again later.');
   }
-  
-  return channelCheck(ctx, next);
 });
 
-// Register commands
-bot.start(startCommand);
-bot.command('admin', adminCommand);
+// My Orders
+bot.hears('📦 My Orders', async (ctx) => {
+  try {
+    console.log('📦 My Orders pressed');
+    await ctx.reply('📦 You don\'t have any orders yet.', {
+      reply_markup: {
+        keyboard: [[{ text: '↩️ Back' }]],
+        resize_keyboard: true
+      }
+    });
+  } catch (error) {
+    console.error('My orders error:', error);
+    ctx.reply('An error occurred. Please try again later.');
+  }
+});
 
-// Register user command handlers - Direct function references
-bot.hears('🛒 Buy Voucher', (ctx) => buyVoucher(ctx));
-bot.hears('🔁 Recover Vouchers', (ctx) => recoverVoucher(ctx));
-bot.hears('📦 My Orders', (ctx) => myOrders(ctx));
-bot.hears('📜 Disclaimer', (ctx) => disclaimer(ctx));
-bot.hears('🆘 Support', (ctx) => support(ctx));
-bot.hears('↩️ Back', (ctx) => back(ctx));
-bot.hears('⬅️ Leave', (ctx) => leave(ctx));
+// Disclaimer
+bot.hears('📜 Disclaimer', async (ctx) => {
+  try {
+    console.log('📜 Disclaimer pressed');
+    await ctx.reply(
+      '📜 *Disclaimer*\n\n' +
+      '• All coupons are 100% OFF\n' +
+      '• No minimum order\n' +
+      '• No returns',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [[{ text: '↩️ Back' }]],
+          resize_keyboard: true
+        }
+      }
+    );
+  } catch (error) {
+    console.error('Disclaimer error:', error);
+    ctx.reply('An error occurred. Please try again later.');
+  }
+});
 
-// Handle callback queries
-bot.on('callback_query', callbackHandler);
+// Support
+bot.hears('🆘 Support', async (ctx) => {
+  try {
+    console.log('🆘 Support pressed');
+    await ctx.reply('🆘 *Support*\n\nContact: @SheinSupportRobot', {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        keyboard: [[{ text: '⬅️ Leave' }]],
+        resize_keyboard: true
+      }
+    });
+  } catch (error) {
+    console.error('Support error:', error);
+    ctx.reply('An error occurred. Please try again later.');
+  }
+});
 
-// Handle photo messages (payment screenshots)
-bot.on('photo', (ctx) => paymentHandler.handleScreenshot(ctx));
+// Back button
+bot.hears('↩️ Back', async (ctx) => {
+  try {
+    console.log('🔙 Back pressed');
+    
+    // Clear keyboard and show main menu
+    await ctx.reply(
+      '🎯 *Main Menu*',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          keyboard: [
+            [{ text: '🛒 Buy Voucher' }, { text: '🔁 Recover Vouchers' }],
+            [{ text: '📦 My Orders' }, { text: '📜 Disclaimer' }],
+            [{ text: '🆘 Support' }]
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+  } catch (error) {
+    console.error('Back button error:', error);
+    ctx.reply('An error occurred. Please try again later.');
+  }
+});
 
-// Handle text messages
-bot.on('text', messageHandler);
+// Leave button
+bot.hears('⬅️ Leave', async (ctx) => {
+  try {
+    console.log('⬅️ Leave pressed');
+    await ctx.reply('👋 Goodbye! Use /start to return.', {
+      reply_markup: { remove_keyboard: true }
+    });
+  } catch (error) {
+    console.error('Leave error:', error);
+    ctx.reply('An error occurred. Please try again later.');
+  }
+});
 
-// Handle errors
+// Callback queries
+bot.on('callback_query', async (ctx) => {
+  try {
+    const data = ctx.callbackQuery.data;
+    console.log('🔘 Callback received:', data);
+    
+    if (data === 'back_main') {
+      await ctx.editMessageText('🎯 *Main Menu*', {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🛒 Buy Voucher', callback_data: 'buy' }],
+            [{ text: '🔁 Recover', callback_data: 'recover' }]
+          ]
+        }
+      });
+    } else if (data.startsWith('buy_')) {
+      const amount = data.split('_')[1];
+      await ctx.editMessageText(
+        `💰 *Payment for ₹${amount}*\n\n` +
+        `QR Code: [Click here](${process.env.QR_IMAGE})\n\n` +
+        `Send screenshot after payment.`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ I Have Paid', callback_data: `paid_${amount}` }],
+              [{ text: '↩️ Back', callback_data: 'back_main' }]
+            ]
+          }
+        }
+      );
+    }
+    
+    await ctx.answerCbQuery();
+  } catch (error) {
+    console.error('Callback error:', error);
+    await ctx.answerCbQuery('❌ Error occurred');
+  }
+});
+
+// Handle all text messages
+bot.on('text', async (ctx) => {
+  try {
+    const text = ctx.message.text;
+    console.log('📝 Text received:', text);
+    
+    // যদি কোন হ্যান্ডলার না পায়
+    await ctx.reply(
+      '❓ Unknown command. Please use the buttons below:',
+      {
+        reply_markup: {
+          keyboard: [
+            [{ text: '🛒 Buy Voucher' }, { text: '🔁 Recover Vouchers' }],
+            [{ text: '📦 My Orders' }, { text: '📜 Disclaimer' }],
+            [{ text: '🆘 Support' }]
+          ],
+          resize_keyboard: true
+        }
+      }
+    );
+  } catch (error) {
+    console.error('Text handler error:', error);
+  }
+});
+
+// Handle photos
+bot.on('photo', async (ctx) => {
+  try {
+    console.log('📸 Photo received');
+    await ctx.reply('✅ Screenshot received! Now send your UTR number.');
+  } catch (error) {
+    console.error('Photo error:', error);
+  }
+});
+
+// Error handler
 bot.catch((err, ctx) => {
-  console.error('Bot error:', err);
+  console.error('🔥 Bot error:', err);
   ctx.reply('An error occurred. Please try again later.').catch(() => {});
 });
 
 // Start bot
 bot.launch().then(() => {
-  console.log('🤖 Bot is running...');
-  console.log('Bot Username:', bot.botInfo?.username);
-  console.log('Admin ID:', process.env.ADMIN_ID);
-  
-  // Start cleanup cron jobs
-  setInterval(async () => {
-    await db.expireOldOrders();
-    await db.cleanupExpiredRecoveries();
-    console.log('🧹 Cleanup completed at', new Date().toLocaleString());
-  }, 5 * 60 * 1000); // Every 5 minutes
+  console.log('🤖 Bot started successfully!');
+  console.log('Bot username:', bot.botInfo?.username);
 });
 
-// Start express server
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Server running on port ${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
 });
 
-// Enable graceful stop
-process.once('SIGINT', () => {
-  console.log('👋 Bot stopping...');
-  bot.stop('SIGINT');
-  process.exit(0);
-});
-
-process.once('SIGTERM', () => {
-  console.log('👋 Bot stopping...');
-  bot.stop('SIGTERM');
-  process.exit(0);
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-});
-
-process.on('unhandledRejection', (err) => {
-  console.error('Unhandled Rejection:', err);
-});
+// Graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
