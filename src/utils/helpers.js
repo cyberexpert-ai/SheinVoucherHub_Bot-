@@ -1,115 +1,87 @@
-const moment = require('moment');
+const moment = require("moment");
 
-module.exports = {
-  // Format currency
-  formatCurrency(amount) {
+function generateOrderId() {
+    const dateStr = moment().format('YYYYMMDD');
+    const randomStr = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const randomNum = Math.floor(Math.random() * 1000000).toString().padStart(6, '0');
+    return `SVH-${dateStr}-${randomNum}`;
+}
+
+function formatCurrency(amount) {
     return `₹${amount.toFixed(2)}`;
-  },
-  
-  // Format date
-  formatDate(date) {
-    return moment(date).format('DD/MM/YYYY HH:mm');
-  },
-  
-  // Generate random string
-  randomString(length) {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    let result = '';
-    for (let i = 0; i < length; i++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-  },
-  
-  // Validate UTR
-  validateUTR(utr) {
-    const utrRegex = /^[A-Za-z0-9]{6,20}$/;
-    return utrRegex.test(utr);
-  },
-  
-  // Validate Order ID
-  validateOrderId(orderId) {
-    const orderRegex = /^SVH-[A-Z0-9]+-[A-Z0-9]+$/;
-    return orderRegex.test(orderId);
-  },
-  
-  // Mask sensitive data
-  maskString(str, visible = 4) {
-    if (!str) return '';
-    if (str.length <= visible) return str;
-    const masked = '*'.repeat(str.length - visible);
-    return str.slice(-visible) + masked;
-  },
-  
-  // Split array into chunks
-  chunkArray(array, size) {
+}
+
+function escapeMarkdown(text) {
+    return text.replace(/([_*[\]()~`>#+\-=|{}.!])/g, '\\$1');
+}
+
+function splitArray(array, chunkSize) {
     const chunks = [];
-    for (let i = 0; i < array.length; i += size) {
-      chunks.push(array.slice(i, i + size));
+    for (let i = 0; i < array.length; i += chunkSize) {
+        chunks.push(array.slice(i, i + chunkSize));
     }
     return chunks;
-  },
-  
-  // Escape Markdown
-  escapeMarkdown(text) {
-    if (!text) return '';
-    return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
-  },
-  
-  // Get time remaining
-  getTimeRemaining(date) {
-    const now = moment();
-    const end = moment(date);
-    const duration = moment.duration(end.diff(now));
+}
+
+function calculatePrice(category, quantity) {
+    // Base price calculation
+    const basePrice = parseInt(category) / 10; // Rough calculation
     
-    if (duration.asSeconds() <= 0) {
-      return 'Expired';
+    let price;
+    if (quantity === 1) {
+        price = basePrice;
+    } else if (quantity === 5) {
+        price = basePrice * 5 - 1;
+    } else {
+        price = basePrice * quantity * 0.95; // 5% discount for bulk
     }
+    
+    // Round to pattern
+    if (price < 100) {
+        price = Math.floor(price / 10) * 10 + 9;
+    } else if (price < 1000) {
+        price = Math.floor(price / 100) * 100 + 99;
+    } else {
+        price = Math.floor(price / 1000) * 1000 + 999;
+    }
+    
+    return Math.floor(price);
+}
+
+function validateUTR(utr) {
+    // Basic UTR validation
+    // Can be enhanced based on actual UTR format
+    const utrRegex = /^[A-Z0-9]{12,22}$/i;
+    return utrRegex.test(utr);
+}
+
+function sanitizeInput(input) {
+    if (!input) return '';
+    return input.toString().trim().replace(/[<>]/g, '');
+}
+
+function formatTimeLeft(expiryTime) {
+    const now = moment();
+    const expiry = moment(expiryTime);
+    const duration = moment.duration(expiry.diff(now));
     
     const hours = Math.floor(duration.asHours());
     const minutes = duration.minutes();
     
     if (hours > 0) {
-      return `${hours}h ${minutes}m`;
+        return `${hours}h ${minutes}m`;
+    } else {
+        return `${minutes}m`;
     }
-    return `${minutes}m`;
-  },
-  
-  // Calculate price with discount
-  calculatePrice(basePrice, quantity) {
-    let pricePerUnit = basePrice;
-    
-    if (quantity >= 20) {
-      pricePerUnit = Math.round(basePrice * 0.85);
-    } else if (quantity >= 10) {
-      pricePerUnit = Math.round(basePrice * 0.9);
-    } else if (quantity >= 5) {
-      pricePerUnit = Math.round(basePrice * 0.95);
-    }
-    
-    return pricePerUnit * quantity;
-  },
-  
-  // Check if within time limit
-  isWithinHours(date, hours) {
-    const diff = moment().diff(moment(date), 'hours');
-    return diff <= hours;
-  },
-  
-  // Log action
-  async logAction(ctx, action, details) {
-    const adminId = process.env.ADMIN_ID;
-    const logMessage = 
-      `📝 *Action Log*\n\n` +
-      `Action: ${action}\n` +
-      `Admin: ${ctx.from.id}\n` +
-      `Details: ${details}\n` +
-      `Time: ${moment().format('DD/MM/YYYY HH:mm:ss')}`;
-    
-    try {
-      await ctx.telegram.sendMessage(adminId, logMessage, { parse_mode: 'Markdown' });
-    } catch (e) {
-      console.error('Log error:', e);
-    }
-  }
+}
+
+module.exports = {
+    generateOrderId,
+    formatCurrency,
+    escapeMarkdown,
+    splitArray,
+    calculatePrice,
+    validateUTR,
+    sanitizeInput,
+    formatTimeLeft
 };
