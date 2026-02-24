@@ -1,37 +1,88 @@
-const db = require('../database/database');
+const { query } = require("../database/database");
+const moment = require("moment");
 
-module.exports = async (ctx, next) => {
-  try {
-    const userId = ctx.from.id;
-    
-    // Check if user is blocked
-    const isBlocked = await db.isUserBlocked(userId);
-    if (isBlocked) {
-      const user = await db.getUser(userId);
-      let blockMsg = '🚫 You are blocked from using this bot.\n\n';
-      if (user?.block_reason) {
-        blockMsg += `Reason: ${user.block_reason}\n`;
-      }
-      if (user?.block_until) {
-        blockMsg += `Until: ${new Date(user.block_until).toLocaleString()}\n`;
-      }
-      blockMsg += '\nContact support: @SheinSupportRobot';
-      
-      return ctx.reply(blockMsg, {
-        reply_markup: {
-          keyboard: [[{ text: '🆘 Support' }]],
-          resize_keyboard: true
+async function checkUserBlock(userId) {
+    try {
+        // Check if user is permanently blocked
+        const user = await query(
+            "SELECT is_blocked, block_reason, block_until FROM users WHERE user_id = ?",
+            [userId]
+        );
+
+        if (user.length > 0) {
+            if (user[0].is_blocked) {
+                if (user[0].block_until) {
+                    const blockUntil = moment(user[0].block_until);
+                    if (moment().isBefore(blockUntil)) {
+                        return {
+                            blocked: true,
+                            temporary: true,
+                            until: blockUntil.format("DD/MM/YYYY HH:mm"),
+                            reason: user[0].block_reason || "No reason provided"
+                        };
+                    } else {
+                        // Block expired, unblock user
+                        await query(
+                            "UPDATE users SET is_blocked = FALSE, block_until = NULL WHERE user_id = ?",
+                            [userId]
+                        );
+                        return { blocked: false };
+                    }
+                } else {
+                    return {
+                        blocked: true,
+                        temporary: false,
+                        reason: user[0].block_reason || "Permanently blocked"
+                    };
+                }
+            }
         }
-      });
+
+        // Check temporary blocks
+        const tempBlock = await query(
+            "SELECT * FROM temp_block WHERE user_id = ? AND blocked_until > NOW()",
+            [userId]
+        );
+
+        if (tempBlock.length > 0) {
+            return {
+                blocked: true,
+                temporary: true,
+                until: moment(tempBlock[0].blocked_until).format("DD/MM/YYYY HH:mm"),
+                reason: tempBlock[0].reason
+            };
+        }
+
+        return { blocked: false };
+    } catch (error) {
+        console.error("Check user block error:", error);
+        return { blocked: false };
     }
-    
-    // Update last active
-    await db.updateUserActivity(userId);
-    
-    return next();
-    
-  } catch (error) {
-    console.error('Auth middleware error:', error);
-    return next();
-  }
-};
+}
+
+async function registerUser(user) {
+    try {
+        const existing = await query(
+            "SELECT * FROM users WHERE user_id = ?",
+            [user.id]
+        );
+
+        if (existing.length === 0) {
+            await query(
+                `INSERT INTO users (user_id, username, first_name, last_name) 
+                 VALUES (?, ?, ?, ?)`,
+                [user.id, user.username || "", user.first_name || "", user.last_name || ""]
+            );
+        } else {
+            await query(
+                `UPDATE users SET username = ?, first_name = ?, last_name = ?, last_active = NOW() 
+                 WHERE user_id = ?`,
+                [user.username || "", user.first_name || "", user.last_name || "", user.id]
+            );
+        }
+    } catch (error) {
+        console.error("Register user error:", error);
+    }
+}
+
+module.exports = { checkUserBlock, registerUser };
