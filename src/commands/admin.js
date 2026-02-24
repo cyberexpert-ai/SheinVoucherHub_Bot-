@@ -1,501 +1,587 @@
-const db = require('../database/database');
-const { Markup } = require('telegraf');
-const moment = require('moment');
+const { query } = require("../database/database");
+const moment = require("moment");
 
-// Admin ID from env
-const ADMIN_ID = parseInt(process.env.ADMIN_ID);
+async function adminCommand(bot, msg) {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const text = msg.text;
 
-// Admin sessions
-const adminSessions = new Map();
-
-module.exports = async (ctx) => {
-  try {
-    const userId = ctx.from.id;
-    
     // Check if user is admin
-    if (userId !== ADMIN_ID) {
-      return ctx.reply('⛔ Unauthorized access');
+    if (userId.toString() !== process.env.ADMIN_ID) {
+        await bot.sendMessage(chatId, "❌ You are not authorized to use admin commands.");
+        return;
     }
-    
-    // Show admin panel
-    const stats = await db.getStats();
-    
-    const adminMessage = 
-      `👑 *Admin Panel*\n\n` +
-      `📊 *Statistics*\n` +
-      `• Total Users: ${stats.totalUsers}\n` +
-      `• Active Users (24h): ${stats.activeUsers}\n` +
-      `• Total Orders: ${stats.totalOrders}\n` +
-      `   ✅ Success: ${stats.successOrders}\n` +
-      `   ⏳ Pending: ${stats.pendingOrders}\n` +
-      `   ❌ Rejected: ${stats.rejectedOrders}\n` +
-      `• Total Revenue: ₹${stats.totalRevenue}\n` +
-      `• Total Stock: ${stats.totalStock}\n\n` +
-      `Select an option:`;
-    
-    const buttons = [
-      [Markup.button.callback('📦 Category Manager', 'admin_categories')],
-      [Markup.button.callback('🎟 Code Manager', 'admin_codes')],
-      [Markup.button.callback('👥 User Manager', 'admin_users')],
-      [Markup.button.callback('📢 Broadcast', 'admin_broadcast')],
-      [Markup.button.callback('📊 Orders', 'admin_orders')],
-      [Markup.button.callback('⚙️ Settings', 'admin_settings')],
-      [Markup.button.callback('📈 Full Stats', 'admin_stats')],
-      [Markup.button.callback('🆘 Support Tickets', 'admin_tickets')]
-    ];
-    
-    await ctx.reply(adminMessage, {
-      parse_mode: 'Markdown',
-      reply_markup: Markup.inlineKeyboard(buttons).reply_markup
+
+    // Parse command
+    if (text === "/admin" || text === "👑 Admin Panel") {
+        await showAdminPanel(bot, chatId);
+    } else if (text.startsWith("/addcategory")) {
+        await addCategory(bot, chatId, text);
+    } else if (text.startsWith("/deletecategory")) {
+        await deleteCategory(bot, chatId, text);
+    } else if (text.startsWith("/addstock")) {
+        await addStock(bot, chatId, text);
+    } else if (text.startsWith("/addvoucher")) {
+        await addVoucher(bot, chatId, text);
+    } else if (text.startsWith("/bulkvoucher")) {
+        await bulkAddVouchers(bot, chatId, text);
+    } else if (text.startsWith("/updateprice")) {
+        await updatePrice(bot, chatId, text);
+    } else if (text.startsWith("/blockuser")) {
+        await blockUser(bot, chatId, text);
+    } else if (text.startsWith("/unblockuser")) {
+        await unblockUser(bot, chatId, text);
+    } else if (text.startsWith("/tempblock")) {
+        await tempBlockUser(bot, chatId, text);
+    } else if (text.startsWith("/broadcast")) {
+        await broadcastMessage(bot, chatId, text);
+    } else if (text.startsWith("/stats")) {
+        await showStats(bot, chatId);
+    } else if (text.startsWith("/orders")) {
+        await showPendingOrders(bot, chatId);
+    } else if (text.startsWith("/discount")) {
+        await createDiscount(bot, chatId, text);
+    } else {
+        await bot.sendMessage(chatId, "❌ Unknown admin command. Use /admin for help.");
+    }
+}
+
+async function showAdminPanel(bot, chatId) {
+    const panelMessage = `👑 *Admin Control Panel*
+
+📊 *Quick Stats*
+• Total Users: ${await getTotalUsers()}
+• Pending Orders: ${await getPendingOrders()}
+• Total Categories: ${await getTotalCategories()}
+• Total Vouchers: ${await getTotalVouchers()}
+
+📌 *Available Commands:*
+
+*Category Management*
+/addcategory [name] - Add new category
+/deletecategory [name] - Delete category
+/updatestock [category] [stock] - Update stock
+
+*Voucher Management*
+/addvoucher [category] [code] - Add single voucher
+/bulkvoucher [category] [codes] - Add bulk vouchers (comma separated)
+/deletevoucher [code] - Delete specific voucher
+/viewvouchers [category] - View all vouchers in category
+
+*Price Management*
+/updateprice [category] [qty] [price] - Update price
+/setbulkprices [category] - Set all prices automatically
+
+*User Management*
+/blockuser [user_id] [reason] - Block user permanently
+/tempblock [user_id] [minutes] [reason] - Temporary block
+/unblockuser [user_id] - Unblock user
+/messageuser [user_id] [text] - Send private message
+
+*Order Management*
+/orders - View pending orders
+/acceptorder [order_id] - Accept order
+/rejectorder [order_id] [reason] - Reject order
+/deliver [order_id] [codes] - Manual delivery
+
+*Discount System*
+/discount [code] [category] [qty] [value] - Create discount
+/deletediscount [code] - Delete discount
+
+*Broadcast*
+/broadcast [message] - Send to all users
+/broadcastphoto [caption] - Send photo broadcast
+
+*System*
+/stats - Detailed statistics
+/export - Export data
+/backup - Backup database
+
+*Security*
+/blockutr [utr] - Block UTR
+/checkutr [utr] - Check UTR usage
+/fraudcheck - Run fraud detection`;
+
+    const adminKeyboard = {
+        reply_markup: {
+            keyboard: [
+                ["📊 Stats", "📦 Pending Orders"],
+                ["➕ Add Category", "📝 Add Voucher"],
+                ["👥 User Management", "📢 Broadcast"],
+                ["🏠 Main Menu"]
+            ],
+            resize_keyboard: true
+        }
+    };
+
+    await bot.sendMessage(chatId, panelMessage, {
+        parse_mode: "Markdown",
+        ...adminKeyboard
     });
-    
-  } catch (error) {
-    console.error('Admin command error:', error);
-    ctx.reply('An error occurred');
-  }
-};
+}
 
-// Handle admin callbacks
-module.exports.handleCallback = async (ctx) => {
-  try {
-    const data = ctx.callbackQuery.data;
-    const userId = ctx.from.id;
-    
-    if (userId !== ADMIN_ID) {
-      return ctx.answerCbQuery('⛔ Unauthorized');
+async function addCategory(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 2) {
+        await bot.sendMessage(chatId, "❌ Usage: /addcategory [name]\nExample: /addcategory 5000");
+        return;
     }
+
+    const categoryName = parts[1];
     
-    // Category Manager
-    if (data === 'admin_categories') {
-      const categories = await db.getCategories();
-      
-      let message = '📦 *Category Manager*\n\n';
-      categories.forEach(cat => {
-        message += `• ${cat.display_name}\n  Stock: ${cat.stock} | Active: ${cat.is_active ? '✅' : '❌'}\n  ID: ${cat.id}\n\n`;
-      });
-      
-      const buttons = [
-        [Markup.button.callback('➕ Add Category', 'admin_add_category')],
-        [Markup.button.callback('✏️ Edit Category', 'admin_edit_category')],
-        [Markup.button.callback('🗑 Delete Category', 'admin_delete_category')],
-        [Markup.button.callback('💰 Manage Prices', 'admin_manage_prices')],
-        [Markup.button.callback('↩️ Back to Admin', 'admin_back')]
-      ];
-      
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard(buttons).reply_markup
-      });
-      return;
-    }
-    
-    // Add Category
-    if (data === 'admin_add_category') {
-      adminSessions.set(userId, { action: 'adding_category' });
-      
-      await ctx.editMessageText(
-        '➕ *Add New Category*\n\n' +
-        'Send category details in format:\n' +
-        '`Name|Display Name|Initial Stock`\n\n' +
-        'Example: `500|₹500 Shein Voucher|0`',
-        {
-          parse_mode: 'Markdown',
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('❌ Cancel', 'admin_categories')]
-          ]).reply_markup
+    try {
+        await query(
+            "INSERT INTO categories (name, display_name, stock) VALUES (?, ?, 0)",
+            [categoryName, `₹${categoryName} Voucher`]
+        );
+        
+        // Generate default prices for new category
+        const basePrice = parseInt(categoryName) === 5000 ? 399 : 299;
+        for (let qty = 1; qty <= 100; qty++) {
+            let price;
+            if (qty === 1) price = basePrice;
+            else if (qty === 5) price = basePrice * 5 - 1;
+            else price = Math.floor(basePrice * qty * 0.95);
+            
+            await query(
+                "INSERT INTO prices (category_name, quantity, price) VALUES (?, ?, ?)",
+                [categoryName, qty, price]
+            );
         }
-      );
-      return;
-    }
-    
-    // Code Manager
-    if (data === 'admin_codes') {
-      const categories = await db.getCategories();
-      
-      let message = '🎟 *Code Manager*\n\nSelect category:';
-      
-      const buttons = categories.map(cat => 
-        [Markup.button.callback(cat.display_name, `admin_codes_cat_${cat.id}`)]
-      );
-      buttons.push([Markup.button.callback('↩️ Back', 'admin_back')]);
-      
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard(buttons).reply_markup
-      });
-      return;
-    }
-    
-    // Code actions for specific category
-    if (data.startsWith('admin_codes_cat_')) {
-      const categoryId = data.split('_')[3];
-      const category = await db.getCategory(categoryId);
-      const stock = await db.getAvailableStock(categoryId);
-      
-      const message = 
-        `🎟 *Code Manager - ${category.display_name}*\n\n` +
-        `Available Stock: ${stock}\n\n` +
-        `Choose action:`;
-      
-      const buttons = [
-        [Markup.button.callback('➕ Add Single Code', `admin_add_code_${categoryId}`)],
-        [Markup.button.callback('📦 Add Bulk Codes', `admin_bulk_codes_${categoryId}`)],
-        [Markup.button.callback('📋 View Codes', `admin_view_codes_${categoryId}`)],
-        [Markup.button.callback('🗑 Delete All Codes', `admin_delete_codes_${categoryId}`)],
-        [Markup.button.callback('↩️ Back', 'admin_codes')]
-      ];
-      
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard(buttons).reply_markup
-      });
-      return;
-    }
-    
-    // Add single code
-    if (data.startsWith('admin_add_code_')) {
-      const categoryId = data.split('_')[3];
-      adminSessions.set(userId, { action: 'adding_code', categoryId });
-      
-      await ctx.editMessageText(
-        '✏️ Send the voucher code:',
-        {
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('❌ Cancel', `admin_codes_cat_${categoryId}`)]
-          ]).reply_markup
-        }
-      );
-      return;
-    }
-    
-    // Bulk codes
-    if (data.startsWith('admin_bulk_codes_')) {
-      const categoryId = data.split('_')[3];
-      adminSessions.set(userId, { action: 'adding_bulk_codes', categoryId });
-      
-      await ctx.editMessageText(
-        '📦 *Add Bulk Codes*\n\n' +
-        'Send codes separated by new lines:\n\n' +
-        'Example:\n' +
-        'CODE123\n' +
-        'CODE456\n' +
-        'CODE789',
-        {
-          parse_mode: 'Markdown',
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('❌ Cancel', `admin_codes_cat_${categoryId}`)]
-          ]).reply_markup
-        }
-      );
-      return;
-    }
-    
-    // User Manager
-    if (data === 'admin_users') {
-      const users = await db.getAllUsers();
-      
-      let message = '👥 *User Manager*\n\n';
-      users.slice(0, 10).forEach(user => {
-        message += `• ${user.first_name || 'No name'} (@${user.username || 'N/A'})\n`;
-        message += `  ID: \`${user.telegram_id}\` | Orders: ${user.total_orders}\n\n`;
-      });
-      message += `Showing first 10 of ${users.length} users`;
-      
-      const buttons = [
-        [Markup.button.callback('🔍 Search User', 'admin_search_user')],
-        [Markup.button.callback('🔨 Blocked Users', 'admin_blocked_users')],
-        [Markup.button.callback('📊 User Stats', 'admin_user_stats')],
-        [Markup.button.callback('↩️ Back', 'admin_back')]
-      ];
-      
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard(buttons).reply_markup
-      });
-      return;
-    }
-    
-    // Broadcast
-    if (data === 'admin_broadcast') {
-      adminSessions.set(userId, { action: 'broadcast' });
-      
-      await ctx.editMessageText(
-        '📢 *Broadcast Message*\n\n' +
-        'Send the message you want to broadcast to all users.\n\n' +
-        'You can also send a photo with caption.',
-        {
-          parse_mode: 'Markdown',
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('❌ Cancel', 'admin_back')]
-          ]).reply_markup
-        }
-      );
-      return;
-    }
-    
-    // Orders
-    if (data === 'admin_orders') {
-      const pending = await db.query(
-        "SELECT * FROM orders WHERE status = 'pending' ORDER BY created_at DESC LIMIT 10"
-      );
-      
-      let message = '📊 *Pending Orders*\n\n';
-      if (pending.length === 0) {
-        message += 'No pending orders.';
-      } else {
-        pending.forEach(order => {
-          message += 
-            `• Order: \`${order.order_id}\`\n` +
-            `  User: \`${order.user_id}\`\n` +
-            `  ${order.category_name} | Qty ${order.quantity}\n` +
-            `  ₹${order.total_price} | ${moment(order.created_at).fromNow()}\n\n`;
+        
+        await bot.sendMessage(chatId, `✅ Category *${categoryName}* added successfully with default prices!`, {
+            parse_mode: "Markdown"
         });
-      }
-      
-      const buttons = [
-        [Markup.button.callback('✅ Success Orders', 'admin_success_orders')],
-        [Markup.button.callback('❌ Rejected Orders', 'admin_rejected_orders')],
-        [Markup.button.callback('🔍 Search Order', 'admin_search_order')],
-        [Markup.button.callback('↩️ Back', 'admin_back')]
-      ];
-      
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard(buttons).reply_markup
-      });
-      return;
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
     }
-    
-    // Settings
-    if (data === 'admin_settings') {
-      const recoveryHours = await db.getSetting('recovery_hours') || '2';
-      
-      const message = 
-        '⚙️ *Settings*\n\n' +
-        `Recovery Hours: ${recoveryHours}\n\n` +
-        'Choose setting to update:';
-      
-      const buttons = [
-        [Markup.button.callback('⏱ Recovery Hours', 'admin_set_recovery')],
-        [Markup.button.callback('📝 Welcome Message', 'admin_set_welcome')],
-        [Markup.button.callback('↩️ Back', 'admin_back')]
-      ];
-      
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard(buttons).reply_markup
-      });
-      return;
+}
+
+async function deleteCategory(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 2) {
+        await bot.sendMessage(chatId, "❌ Usage: /deletecategory [name]");
+        return;
     }
+
+    const categoryName = parts[1];
     
-    // Stats
-    if (data === 'admin_stats') {
-      const stats = await db.getStats();
-      
-      const message = 
-        '📈 *Full Statistics*\n\n' +
-        `👥 **Users**\n` +
-        `• Total: ${stats.totalUsers}\n` +
-        `• Active (24h): ${stats.activeUsers}\n` +
-        `• Blocked: ${stats.blockedUsers || 0}\n\n` +
-        `📦 **Orders**\n` +
-        `• Total: ${stats.totalOrders}\n` +
-        `• Pending: ${stats.pendingOrders}\n` +
-        `• Success: ${stats.successOrders}\n` +
-        `• Rejected: ${stats.rejectedOrders}\n\n` +
-        `💰 **Revenue**\n` +
-        `• Total: ₹${stats.totalRevenue}\n` +
-        `• Avg per order: ₹${stats.totalOrders ? (stats.totalRevenue / stats.totalOrders).toFixed(2) : 0}\n\n` +
-        `📊 **Stock**\n` +
-        `• Total: ${stats.totalStock}`;
-      
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback('↩️ Back', 'admin_back')]
-        ]).reply_markup
-      });
-      return;
-    }
-    
-    // Support Tickets
-    if (data === 'admin_tickets') {
-      const tickets = await db.getSupportTickets('open');
-      
-      let message = '🆘 *Open Support Tickets*\n\n';
-      if (tickets.length === 0) {
-        message += 'No open tickets.';
-      } else {
-        tickets.forEach(ticket => {
-          message += 
-            `• Ticket: \`${ticket.ticket_id}\`\n` +
-            `  User: ${ticket.first_name || ''} (@${ticket.username || 'N/A'})\n` +
-            `  Message: ${ticket.message.substring(0, 50)}${ticket.message.length > 50 ? '...' : ''}\n` +
-            `  ${moment(ticket.created_at).fromNow()}\n\n`;
+    try {
+        await query("DELETE FROM categories WHERE name = ?", [categoryName]);
+        await query("DELETE FROM prices WHERE category_name = ?", [categoryName]);
+        await query("DELETE FROM vouchers WHERE category_name = ?", [categoryName]);
+        
+        await bot.sendMessage(chatId, `✅ Category *${categoryName}* deleted successfully!`, {
+            parse_mode: "Markdown"
         });
-      }
-      
-      const buttons = [
-        [Markup.button.callback('✅ Closed Tickets', 'admin_closed_tickets')],
-        [Markup.button.callback('↩️ Back', 'admin_back')]
-      ];
-      
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard(buttons).reply_markup
-      });
-      return;
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
     }
-    
-    // Back to admin main
-    if (data === 'admin_back') {
-      const stats = await db.getStats();
-      
-      const message = 
-        `👑 *Admin Panel*\n\n` +
-        `📊 *Statistics*\n` +
-        `• Total Users: ${stats.totalUsers}\n` +
-        `• Active Users (24h): ${stats.activeUsers}\n` +
-        `• Total Orders: ${stats.totalOrders}\n` +
-        `   ✅ Success: ${stats.successOrders}\n` +
-        `   ⏳ Pending: ${stats.pendingOrders}\n` +
-        `   ❌ Rejected: ${stats.rejectedOrders}\n` +
-        `• Total Revenue: ₹${stats.totalRevenue}\n` +
-        `• Total Stock: ${stats.totalStock}\n\n` +
-        `Select an option:`;
-      
-      const buttons = [
-        [Markup.button.callback('📦 Category Manager', 'admin_categories')],
-        [Markup.button.callback('🎟 Code Manager', 'admin_codes')],
-        [Markup.button.callback('👥 User Manager', 'admin_users')],
-        [Markup.button.callback('📢 Broadcast', 'admin_broadcast')],
-        [Markup.button.callback('📊 Orders', 'admin_orders')],
-        [Markup.button.callback('⚙️ Settings', 'admin_settings')],
-        [Markup.button.callback('📈 Full Stats', 'admin_stats')],
-        [Markup.button.callback('🆘 Support Tickets', 'admin_tickets')]
-      ];
-      
-      await ctx.editMessageText(message, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard(buttons).reply_markup
-      });
-      return;
-    }
-    
-  } catch (error) {
-    console.error('Admin callback error:', error);
-    ctx.answerCbQuery('❌ Error');
-  }
-};
+}
 
-// Handle accept order
-module.exports.handleAcceptOrder = async (ctx, orderId) => {
-  try {
-    const order = await db.getOrder(orderId);
-    if (!order) {
-      return ctx.answerCbQuery('Order not found', { alert: true });
+async function addStock(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 3) {
+        await bot.sendMessage(chatId, "❌ Usage: /addstock [category] [quantity]");
+        return;
     }
+
+    const categoryName = parts[1];
+    const quantity = parseInt(parts[2]);
     
-    // Deliver order
-    const codes = await db.deliverOrder(orderId, ctx.from.id);
-    
-    if (!codes) {
-      return ctx.answerCbQuery('Insufficient stock!', { alert: true });
+    try {
+        await query(
+            "UPDATE categories SET stock = stock + ? WHERE name = ?",
+            [quantity, categoryName]
+        );
+        
+        await bot.sendMessage(chatId, `✅ Added ${quantity} stock to *${categoryName}* category`, {
+            parse_mode: "Markdown"
+        });
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
     }
-    
-    // Send codes to user
-    let userMessage = `✅ *Order Approved!*\n\nOrder ID: \`${orderId}\`\n\n`;
-    codes.forEach((code, index) => {
-      userMessage += `🔑 Code ${index + 1}: \`${code}\`\n`;
-    });
-    
-    await ctx.telegram.sendMessage(order.user_id, userMessage, { parse_mode: 'Markdown' });
-    
-    // Send notification to channel
-    const user = await db.getUser(order.user_id);
-    const channelMessage = 
-      `🎯 𝗡𝗲𝘄 𝗢𝗿𝗱𝗲𝗿 𝗦𝘂𝗯𝗺𝗶𝘁𝘁𝗲𝗱\n` +
-      `━━━━━━━━━━━•❈•━━━━━━━━━━━\n` +
-      `╰➤👤 𝗨𝗦𝗘𝗥 𝗡𝗔𝗠𝗘 : ${user.first_name || ''} ${user.last_name || ''}\n` +
-      `╰➤🆔 𝗨𝗦𝗘𝗥 𝗜𝗗 : \`${order.user_id}\`\n` +
-      `╰➤📡 𝗦𝗧𝗔𝗧𝗨𝗦: ✅ Success\n` +
-      `╰➤ 🔰𝗤𝗨𝗔𝗟𝗜𝗧𝗬: High 📶\n` +
-      `╰➤ 📦𝗧𝗢𝗧𝗔𝗟 𝗤𝗨𝗔𝗡𝗧𝗜𝗧𝗬 : ${order.quantity}\n` +
-      `╰➤ 💳𝗖𝗢𝗦𝗧 : ₹${order.total_price}\n\n` +
-      `🤖𝗕𝗢𝗧 𝗡𝗔𝗠𝗘 : @SheinVoucherHub_Bot\n` +
-      `━━━━━━━━━━━•❈•━━━━━━━━━━━`;
-    
-    await ctx.telegram.sendMessage(process.env.CHANNEL_2_ID, channelMessage, { parse_mode: 'Markdown' });
-    
-    await ctx.answerCbQuery('✅ Order approved and delivered');
-    await ctx.editMessageText(`✅ Order ${orderId} approved and delivered to user.`);
-    
-  } catch (error) {
-    console.error('Accept order error:', error);
-    ctx.answerCbQuery('❌ Error accepting order');
-  }
-};
+}
 
-// Handle reject order
-module.exports.handleRejectOrder = async (ctx, orderId) => {
-  try {
-    adminSessions.set(ctx.from.id, { action: 'rejecting_order', orderId });
-    
-    await ctx.editMessageText(
-      `❌ *Reject Order*\n\nOrder: \`${orderId}\`\n\n` +
-      'Send rejection reason:',
-      {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard([
-          [Markup.button.callback('↩️ Cancel', 'admin_back')]
-        ]).reply_markup
-      }
-    );
-    
-  } catch (error) {
-    console.error('Reject order error:', error);
-    ctx.answerCbQuery('❌ Error');
-  }
-};
+async function addVoucher(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 3) {
+        await bot.sendMessage(chatId, "❌ Usage: /addvoucher [category] [code]");
+        return;
+    }
 
-// Handle broadcast send
-module.exports.handleBroadcastSend = async (ctx, text, photo) => {
-  try {
-    const users = await db.getAllUsers();
-    let sent = 0;
+    const categoryName = parts[1];
+    const code = parts.slice(2).join(" ");
+    
+    try {
+        await query(
+            "INSERT INTO vouchers (code, category_name, added_by) VALUES (?, ?, ?)",
+            [code, categoryName, chatId]
+        );
+        
+        await bot.sendMessage(chatId, `✅ Voucher added to *${categoryName}* category`, {
+            parse_mode: "Markdown"
+        });
+    } catch (error) {
+        if (error.code === 'ER_DUP_ENTRY') {
+            await bot.sendMessage(chatId, "❌ This voucher code already exists!");
+        } else {
+            await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+        }
+    }
+}
+
+async function bulkAddVouchers(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 3) {
+        await bot.sendMessage(chatId, "❌ Usage: /bulkvoucher [category] [code1,code2,code3]");
+        return;
+    }
+
+    const categoryName = parts[1];
+    const codesText = parts.slice(2).join(" ");
+    const codes = codesText.split(",").map(c => c.trim());
+    
+    let success = 0;
     let failed = 0;
     
-    await ctx.reply(`📢 Broadcasting to ${users.length} users...`);
-    
-    for (const user of users) {
-      try {
-        if (photo) {
-          await ctx.telegram.sendPhoto(user.telegram_id, photo, {
-            caption: text,
-            parse_mode: 'Markdown'
-          });
-        } else {
-          await ctx.telegram.sendMessage(user.telegram_id, text, {
-            parse_mode: 'Markdown'
-          });
+    for (const code of codes) {
+        try {
+            await query(
+                "INSERT INTO vouchers (code, category_name, added_by) VALUES (?, ?, ?)",
+                [code, categoryName, chatId]
+            );
+            success++;
+        } catch (error) {
+            failed++;
         }
-        sent++;
-        
-        // Small delay to avoid rate limiting
-        await new Promise(resolve => setTimeout(resolve, 50));
-      } catch (e) {
-        failed++;
-      }
     }
     
-    await ctx.reply(`✅ Broadcast complete!\nSent: ${sent}\nFailed: ${failed}`);
-    adminSessions.delete(ctx.from.id);
-    
-  } catch (error) {
-    console.error('Broadcast error:', error);
-    ctx.reply('❌ Broadcast failed');
-  }
-};
+    await bot.sendMessage(chatId, `✅ Bulk add complete!\nSuccess: ${success}\nFailed: ${failed} (duplicates)`, {
+        parse_mode: "Markdown"
+    });
+}
 
-// Export sessions for other handlers
-module.exports.adminSessions = adminSessions;
+async function updatePrice(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 4) {
+        await bot.sendMessage(chatId, "❌ Usage: /updateprice [category] [quantity] [price]");
+        return;
+    }
+
+    const categoryName = parts[1];
+    const quantity = parseInt(parts[2]);
+    const price = parseInt(parts[3]);
+    
+    try {
+        await query(
+            "INSERT INTO prices (category_name, quantity, price) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE price = ?",
+            [categoryName, quantity, price, price]
+        );
+        
+        await bot.sendMessage(chatId, `✅ Price updated for *${categoryName}* x${quantity} = ₹${price}`, {
+            parse_mode: "Markdown"
+        });
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+    }
+}
+
+async function blockUser(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 3) {
+        await bot.sendMessage(chatId, "❌ Usage: /blockuser [user_id] [reason]");
+        return;
+    }
+
+    const targetUserId = parseInt(parts[1]);
+    const reason = parts.slice(2).join(" ");
+    
+    try {
+        await query(
+            "UPDATE users SET is_blocked = TRUE, block_reason = ? WHERE user_id = ?",
+            [reason, targetUserId]
+        );
+        
+        await bot.sendMessage(chatId, `✅ User *${targetUserId}* blocked permanently.\nReason: ${reason}`, {
+            parse_mode: "Markdown"
+        });
+        
+        // Notify user
+        try {
+            await bot.sendMessage(targetUserId, 
+                `🚫 *You have been blocked*\n\nReason: ${reason}\n\nContact @SheinSupportRobot for appeal.`,
+                { parse_mode: "Markdown" }
+            );
+        } catch (e) {}
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+    }
+}
+
+async function tempBlockUser(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 4) {
+        await bot.sendMessage(chatId, "❌ Usage: /tempblock [user_id] [minutes] [reason]");
+        return;
+    }
+
+    const targetUserId = parseInt(parts[1]);
+    const minutes = parseInt(parts[2]);
+    const reason = parts.slice(3).join(" ");
+    
+    const blockedUntil = moment().add(minutes, 'minutes').format('YYYY-MM-DD HH:mm:ss');
+    
+    try {
+        await query(
+            "INSERT INTO temp_block (user_id, reason, blocked_until) VALUES (?, ?, ?)",
+            [targetUserId, reason, blockedUntil]
+        );
+        
+        await query(
+            "UPDATE users SET is_blocked = TRUE, block_reason = ?, block_until = ? WHERE user_id = ?",
+            [reason, blockedUntil, targetUserId]
+        );
+        
+        await bot.sendMessage(chatId, 
+            `✅ User *${targetUserId}* blocked temporarily.\nDuration: ${minutes} minutes\nReason: ${reason}\nUntil: ${blockedUntil}`,
+            { parse_mode: "Markdown" }
+        );
+        
+        // Notify user
+        try {
+            await bot.sendMessage(targetUserId,
+                `🚫 *Temporary Block*\n\nDuration: ${minutes} minutes\nReason: ${reason}\n\nContact @SheinSupportRobot if you think this is a mistake.`,
+                { parse_mode: "Markdown" }
+            );
+        } catch (e) {}
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+    }
+}
+
+async function unblockUser(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 2) {
+        await bot.sendMessage(chatId, "❌ Usage: /unblockuser [user_id]");
+        return;
+    }
+
+    const targetUserId = parseInt(parts[1]);
+    
+    try {
+        await query(
+            "UPDATE users SET is_blocked = FALSE, block_reason = NULL, block_until = NULL WHERE user_id = ?",
+            [targetUserId]
+        );
+        
+        await query("DELETE FROM temp_block WHERE user_id = ?", [targetUserId]);
+        
+        await bot.sendMessage(chatId, `✅ User *${targetUserId}* unblocked successfully!`, {
+            parse_mode: "Markdown"
+        });
+        
+        // Notify user
+        try {
+            await bot.sendMessage(targetUserId,
+                `✅ *You have been unblocked*\n\nYou can now use @SheinVoucherHub_Bot again.`,
+                { parse_mode: "Markdown" }
+            );
+        } catch (e) {}
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+    }
+}
+
+async function broadcastMessage(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 2) {
+        await bot.sendMessage(chatId, "❌ Usage: /broadcast [message]");
+        return;
+    }
+
+    const message = parts.slice(1).join(" ");
+    
+    try {
+        const users = await query("SELECT user_id FROM users WHERE is_blocked = FALSE");
+        
+        let sent = 0;
+        let failed = 0;
+        
+        for (const user of users) {
+            try {
+                await bot.sendMessage(user.user_id, `📢 *Broadcast Message*\n\n${message}`, {
+                    parse_mode: "Markdown"
+                });
+                sent++;
+            } catch (e) {
+                failed++;
+            }
+            
+            // Small delay to avoid flooding
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        
+        await bot.sendMessage(chatId, 
+            `📊 *Broadcast Complete*\n\nTotal Users: ${users.length}\n✅ Sent: ${sent}\n❌ Failed: ${failed}`,
+            { parse_mode: "Markdown" }
+        );
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+    }
+}
+
+async function showStats(bot, chatId) {
+    try {
+        const totalUsers = await query("SELECT COUNT(*) as count FROM users");
+        const blockedUsers = await query("SELECT COUNT(*) as count FROM users WHERE is_blocked = TRUE");
+        const totalOrders = await query("SELECT COUNT(*) as count FROM orders");
+        const pendingOrders = await query("SELECT COUNT(*) as count FROM orders WHERE status = 'pending'");
+        const successOrders = await query("SELECT COUNT(*) as count FROM orders WHERE status = 'success'");
+        const totalRevenue = await query("SELECT SUM(total_price) as total FROM orders WHERE status = 'success'");
+        const totalVouchers = await query("SELECT COUNT(*) as count FROM vouchers WHERE is_used = FALSE");
+        const usedVouchers = await query("SELECT COUNT(*) as count FROM vouchers WHERE is_used = TRUE");
+        
+        const stats = `📊 *System Statistics*
+
+👥 *Users*
+Total Users: ${totalUsers[0].count}
+Blocked Users: ${blockedUsers[0].count}
+Active Users: ${totalUsers[0].count - blockedUsers[0].count}
+
+📦 *Orders*
+Total Orders: ${totalOrders[0].count}
+Pending: ${pendingOrders[0].count}
+Success: ${successOrders[0].count}
+Total Revenue: ₹${totalRevenue[0].total || 0}
+
+🎟 *Vouchers*
+Available: ${totalVouchers[0].count}
+Used: ${usedVouchers[0].count}
+Total: ${totalVouchers[0].count + usedVouchers[0].count}
+
+📊 *Categories*`;
+
+        await bot.sendMessage(chatId, stats, { parse_mode: "Markdown" });
+        
+        // Show category wise stats
+        const categories = await query(`
+            SELECT c.name, c.stock, COUNT(v.id) as total_vouchers,
+                   SUM(CASE WHEN v.is_used = FALSE THEN 1 ELSE 0 END) as available
+            FROM categories c
+            LEFT JOIN vouchers v ON c.name = v.category_name
+            GROUP BY c.name
+        `);
+        
+        for (const cat of categories) {
+            await bot.sendMessage(chatId, 
+                `*${cat.name}*\nStock: ${cat.stock}\nVouchers: ${cat.available}/${cat.total_vouchers}`,
+                { parse_mode: "Markdown" }
+            );
+        }
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+    }
+}
+
+async function showPendingOrders(bot, chatId) {
+    try {
+        const orders = await query(`
+            SELECT o.*, u.username, u.first_name 
+            FROM orders o
+            JOIN users u ON o.user_id = u.user_id
+            WHERE o.status = 'pending'
+            ORDER BY o.created_at DESC
+            LIMIT 20
+        `);
+        
+        if (orders.length === 0) {
+            await bot.sendMessage(chatId, "✅ No pending orders found!");
+            return;
+        }
+        
+        for (const order of orders) {
+            const orderInfo = `📦 *Pending Order*
+
+🆔 Order: ${order.order_id}
+👤 User: ${order.first_name} (${order.user_id})
+📦 Category: ₹${order.category_name} x${order.quantity}
+💰 Amount: ₹${order.total_price}
+🔢 UTR: ${order.utr_number || 'N/A'}
+⏱ Created: ${moment(order.created_at).format('DD/MM/YYYY HH:mm')}
+⏳ Expires: ${moment(order.expires_at).format('DD/MM/YYYY HH:mm')}
+
+*Actions:*
+/acceptorder ${order.order_id}
+/rejectorder ${order.order_id} [reason]`;
+
+            const actionKeyboard = {
+                inline_keyboard: [
+                    [
+                        { text: "✅ Accept", callback_data: `admin_accept_${order.order_id}` },
+                        { text: "❌ Reject", callback_data: `admin_reject_${order.order_id}` }
+                    ]
+                ]
+            };
+            
+            await bot.sendMessage(chatId, orderInfo, {
+                parse_mode: "Markdown",
+                reply_markup: actionKeyboard
+            });
+        }
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+    }
+}
+
+async function createDiscount(bot, chatId, text) {
+    const parts = text.split(" ");
+    if (parts.length < 5) {
+        await bot.sendMessage(chatId, "❌ Usage: /discount [code] [category] [quantity] [value] [type=fixed]\nExample: /discount SAVE50 1000 5 50 fixed");
+        return;
+    }
+
+    const code = parts[1];
+    const category = parts[2];
+    const quantity = parseInt(parts[3]);
+    const value = parseInt(parts[4]);
+    const type = parts[5] || 'fixed';
+    
+    try {
+        await query(
+            `INSERT INTO discounts (code, category_name, quantity, discount_type, discount_value, valid_from, valid_until, created_by)
+             VALUES (?, ?, ?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL 30 DAY), ?)`,
+            [code, category, quantity, type, value, chatId]
+        );
+        
+        await bot.sendMessage(chatId, 
+            `✅ Discount code *${code}* created!\nCategory: ${category} x${quantity}\n${type === 'fixed' ? '₹' + value + ' off' : value + '% off'}`,
+            { parse_mode: "Markdown" }
+        );
+    } catch (error) {
+        await bot.sendMessage(chatId, `❌ Error: ${error.message}`);
+    }
+}
+
+// Helper functions
+async function getTotalUsers() {
+    const result = await query("SELECT COUNT(*) as count FROM users");
+    return result[0].count;
+}
+
+async function getPendingOrders() {
+    const result = await query("SELECT COUNT(*) as count FROM orders WHERE status = 'pending'");
+    return result[0].count;
+}
+
+async function getTotalCategories() {
+    const result = await query("SELECT COUNT(*) as count FROM categories");
+    return result[0].count;
+}
+
+async function getTotalVouchers() {
+    const result = await query("SELECT COUNT(*) as count FROM vouchers");
+    return result[0].count;
+}
+
+module.exports = { adminCommand };
