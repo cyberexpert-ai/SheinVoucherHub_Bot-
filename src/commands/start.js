@@ -1,106 +1,153 @@
-const db = require('../database/database');
-const { Markup } = require('telegraf');
+const { registerUser } = require("../middlewares/auth");
+const { checkUserBlock } = require("../middlewares/auth");
+const { generateCaptcha, verifyCaptcha } = require("../utils/captcha");
 
-module.exports = async (ctx) => {
-  try {
-    const userId = ctx.from.id;
-    const username = ctx.from.username || '';
-    const firstName = ctx.from.first_name || '';
-    const lastName = ctx.from.last_name || '';
-    
-    // Create or update user
-    await db.createUser(userId, username, firstName, lastName);
-    
+async function startCommand(bot, msg) {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const user = msg.from;
+
+    // Register user in database
+    await registerUser(user);
+
     // Check if user is blocked
-    const isBlocked = await db.isUserBlocked(userId);
-    if (isBlocked) {
-      const user = await db.getUser(userId);
-      let blockMsg = '🚫 You are blocked from using this bot.\n\n';
-      if (user?.block_reason) {
-        blockMsg += `Reason: ${user.block_reason}\n`;
-      }
-      if (user?.block_until) {
-        blockMsg += `Until: ${new Date(user.block_until).toLocaleString()}\n`;
-      }
-      blockMsg += '\nContact support: @SheinSupportRobot';
-      
-      return ctx.reply(blockMsg, {
+    const blockStatus = await checkUserBlock(userId);
+    if (blockStatus.blocked) {
+        let blockMessage = "🚫 *You are blocked from using this bot*\n\n";
+        blockMessage += `Reason: ${blockStatus.reason}\n`;
+        
+        if (blockStatus.temporary) {
+            blockMessage += `Blocked until: ${blockStatus.until}\n\n`;
+            blockMessage += "For support, contact @SheinSupportRobot";
+        } else {
+            blockMessage += "\nThis is a permanent block.";
+        }
+
+        const supportKeyboard = {
+            inline_keyboard: [
+                [{ text: "🆘 Contact Support", url: "https://t.me/SheinSupportRobot" }]
+            ]
+        };
+
+        await bot.sendMessage(chatId, blockMessage, {
+            parse_mode: "Markdown",
+            reply_markup: supportKeyboard
+        });
+        return;
+    }
+
+    // Check if this is a new start (no active session)
+    const sessionKey = `session_${userId}`;
+    const hasSession = await global.botSession?.get(sessionKey);
+
+    if (!hasSession) {
+        // Show captcha for new users
+        const captcha = await generateCaptcha();
+        
+        // Store captcha in session
+        if (!global.botSession) global.botSession = new Map();
+        global.botSession.set(sessionKey, {
+            step: "captcha",
+            captcha: captcha.text,
+            messageIds: []
+        });
+
+        const captchaMessage = await bot.sendPhoto(chatId, captcha.image, {
+            caption: "🔐 *Verification Required*\n\nPlease enter the numbers shown in the image above.\n\nThis is to prevent bots.",
+            parse_mode: "Markdown",
+            reply_markup: {
+                force_reply: true
+            }
+        });
+
+        // Store message ID for later deletion
+        const session = global.botSession.get(sessionKey);
+        session.messageIds.push(captchaMessage.message_id);
+        global.botSession.set(sessionKey, session);
+
+        return;
+    }
+
+    // Show welcome message
+    await showWelcomeMessage(bot, chatId, userId);
+}
+
+async function showWelcomeMessage(bot, chatId, userId) {
+    const welcomeMessage = `🎯 *Welcome to Shein Voucher Hub!*
+
+🚀 Get exclusive Shein vouchers at the best prices!
+
+📌 *Choose an option below:*`;
+
+    const mainKeyboard = {
         reply_markup: {
-          keyboard: [[{ text: '🆘 Support' }]],
-          resize_keyboard: true
+            keyboard: [
+                ["🛒 Buy Voucher"],
+                ["🔁 Recover Vouchers", "📦 My Orders"],
+                ["📜 Disclaimer", "🆘 Support"]
+            ],
+            resize_keyboard: true
         }
-      });
-    }
-    
-    // Check channel membership
-    const channel1 = process.env.CHANNEL_1;
-    const channel2 = process.env.CHANNEL_2;
-    
-    let inChannel1 = false;
-    let inChannel2 = false;
-    
-    try {
-      const member1 = await ctx.telegram.getChatMember(channel1, userId);
-      inChannel1 = ['member', 'administrator', 'creator'].includes(member1.status);
-    } catch (e) {}
-    
-    try {
-      const member2 = await ctx.telegram.getChatMember(channel2, userId);
-      inChannel2 = ['member', 'administrator', 'creator'].includes(member2.status);
-    } catch (e) {}
-    
-    // If not in channels, show force join
-    if (!inChannel1 || !inChannel2) {
-      const channels = [];
-      if (!inChannel1) channels.push(channel1);
-      if (!inChannel2) channels.push(channel2);
-      
-      const buttons = channels.map(ch => [Markup.button.url(ch, `https://t.me/${ch.replace('@', '')}`)]);
-      buttons.push([Markup.button.callback('✅ Verify', 'verify_membership')]);
-      
-      return ctx.reply(
-        '🚫 *Access Denied*\n\n' +
-        'You must join our channels to use this bot:\n' +
-        channels.map(ch => `🔹 ${ch}`).join('\n') +
-        '\n\nAfter joining, click Verify button.',
-        {
-          parse_mode: 'Markdown',
-          reply_markup: Markup.inlineKeyboard(buttons).reply_markup
+    };
+
+    // Delete previous messages if any
+    const sessionKey = `session_${userId}`;
+    const session = global.botSession?.get(sessionKey);
+    if (session?.messageIds) {
+        for (const msgId of session.messageIds) {
+            try {
+                await bot.deleteMessage(chatId, msgId);
+            } catch (e) {}
         }
-      );
     }
-    
-    // User is verified, show welcome message
-    const welcomeMessage = await db.getSetting('welcome_message') || 
-      '🎯 Welcome to Shein Voucher Hub S!\n\n🚀 Get exclusive Shein vouchers at the best prices!\n\n📌 Choose an option below:';
-    
-    // Update verification status
-    await db.query(
-      'UPDATE users SET is_verified = TRUE WHERE telegram_id = ?',
-      [userId]
-    );
-    
-    // Show main menu
-    await ctx.reply(welcomeMessage, {
-      reply_markup: {
-        keyboard: [
-          [{ text: '🛒 Buy Voucher' }, { text: '🔁 Recover Vouchers' }],
-          [{ text: '📦 My Orders' }, { text: '📜 Disclaimer' }],
-          [{ text: '🆘 Support' }]
-        ],
-        resize_keyboard: true
-      }
+
+    const sentMsg = await bot.sendMessage(chatId, welcomeMessage, {
+        parse_mode: "Markdown",
+        ...mainKeyboard
     });
-    
-    // Delete previous message if exists
-    if (ctx.message) {
-      try {
-        await ctx.deleteMessage(ctx.message.message_id);
-      } catch (e) {}
+
+    // Update session
+    if (!global.botSession) global.botSession = new Map();
+    global.botSession.set(sessionKey, {
+        step: "main_menu",
+        messageIds: [sentMsg.message_id]
+    });
+}
+
+async function handleCaptchaResponse(bot, msg) {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    const text = msg.text;
+    const sessionKey = `session_${userId}`;
+    const session = global.botSession?.get(sessionKey);
+
+    if (!session || session.step !== "captcha") {
+        return false;
     }
-    
-  } catch (error) {
-    console.error('Start command error:', error);
-    ctx.reply('An error occurred. Please try again later.');
-  }
-};
+
+    if (text === session.captcha) {
+        // Captcha verified
+        await bot.sendMessage(chatId, "✅ *Verification successful!*", {
+            parse_mode: "Markdown"
+        });
+
+        // Update session
+        session.step = "verified";
+        global.botSession.set(sessionKey, session);
+
+        // Show welcome message
+        await showWelcomeMessage(bot, chatId, userId);
+        return true;
+    } else {
+        // Wrong captcha
+        await bot.sendMessage(chatId, "❌ *Wrong code!*\n\nPlease try again with /start", {
+            parse_mode: "Markdown"
+        });
+        
+        // Clear session to restart
+        global.botSession.delete(sessionKey);
+        return true;
+    }
+}
+
+module.exports = { startCommand, handleCaptchaResponse, showWelcomeMessage };
