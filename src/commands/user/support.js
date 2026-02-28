@@ -1,146 +1,95 @@
-const { query } = require("../../database/database");
+const db = require('../../database/database');
+const constants = require('../../utils/constants');
 
-async function support(bot, msg) {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    const supportMessage = `🆘 *Support Center*
-
-How can we help you today?
-
-📌 *Common Issues:*
-• Voucher not working
-• Payment failed
-• Order not delivered
-• Recovery issues
-• Refund request
-• Technical support
-
-Please describe your issue in detail.
-Include Order ID if applicable.
-
-⏱ *Response Time:* 5-30 minutes
-
-⚠️ *Warning:*
-• Fake complaints = Permanent block
-• Abusive language = Immediate block
-• Multiple fake tickets = Account restriction
-
-For urgent issues, contact:
-🤖 @SheinSupportRobot`;
-
-    const keyboard = {
-        inline_keyboard: [
-            [{ text: "↩️ Leave", callback_data: "leave_support" }]
-        ],
-        reply_markup: {
-            force_reply: true
+async function startSupport(bot, chatId, userId) {
+    const msg = await bot.sendMessage(chatId,
+        `🆘 Support\n\n` +
+        `Please describe your issue. Our team will respond shortly.\n\n` +
+        `⚠️ Fake, abusive, or spam messages will result in restriction/block.`,
+        {
+            reply_markup: {
+                force_reply: true,
+                selective: true
+            }
         }
+    );
+    
+    global.waitingFor = global.waitingFor || {};
+    global.waitingFor[userId] = {
+        type: 'support_message',
+        messageId: msg.message_id
     };
+}
 
-    const message = await bot.sendMessage(chatId, supportMessage, {
-        parse_mode: "Markdown",
-        reply_markup: keyboard
+async function forwardToAdmin(bot, chatId, userId, message, messageId) {
+    const user = await db.getUser(userId);
+    
+    const supportMsg = `🆘 New Support Message\n\n` +
+                      `From: ${user.first_name} (@${user.username || 'N/A'})\n` +
+                      `User ID: ${userId}\n` +
+                      `Message: ${message}\n\n` +
+                      `Reply to this message to respond to user.`;
+    
+    const adminMsg = await bot.sendMessage(process.env.ADMIN_ID, supportMsg, {
+        reply_markup: {
+            force_reply: true,
+            selective: true
+        }
     });
-
-    // Store support session
-    if (!global.userSessions) global.userSessions = new Map();
-    global.userSessions.set(`support_${userId}`, {
-        step: "waiting_message",
-        messageId: message.message_id
-    });
+    
+    // Store mapping for reply handling
+    global.supportConversations = global.supportConversations || {};
+    global.supportConversations[adminMsg.message_id] = {
+        userId: userId,
+        userMsgId: messageId,
+        chatId: chatId
+    };
+    
+    await bot.sendMessage(chatId,
+        `✅ Your message has been sent to support team.\n` +
+        `We'll get back to you soon.`,
+        {
+            reply_markup: {
+                keyboard: [[constants.BUTTONS.LEAVE]],
+                resize_keyboard: true
+            }
+        }
+    );
 }
 
-async function processSupportMessage(bot, msg) {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const text = msg.text;
-    const messageId = msg.message_id;
-
-    // Check if user is in support session
-    const session = global.userSessions?.get(`support_${userId}`);
-    if (!session || session.step !== "waiting_message") {
-        return false;
+async function handleAdminReply(bot, adminId, replyToMessageId, replyText) {
+    const conversation = global.supportConversations?.[replyToMessageId];
+    
+    if (!conversation) {
+        await bot.sendMessage(adminId, '❌ Conversation not found.');
+        return;
     }
-
-    // Save support ticket
-    try {
-        await query(
-            "INSERT INTO support_tickets (user_id, message, status) VALUES (?, ?, 'open')",
-            [userId, text]
-        );
-
-        // Forward to admin
-        const forwardMessage = `🆘 *New Support Ticket*
-
-👤 User: ${userId}
-📝 Message: ${text}
-
-⏱ Time: ${new Date().toLocaleString()}`;
-
-        const adminKeyboard = {
-            inline_keyboard: [
-                [{ text: "✅ Mark Resolved", callback_data: `support_resolve_${userId}` }],
-                [{ text: "🚫 Block User", callback_data: `support_block_${userId}` }]
-            ]
-        };
-
-        await bot.sendMessage(process.env.ADMIN_ID, forwardMessage, {
-            parse_mode: "Markdown",
-            reply_markup: adminKeyboard
-        });
-
-        // Confirm to user
-        await bot.sendMessage(chatId,
-            `✅ *Support Ticket Submitted*
-
-Ticket ID: #${Date.now().toString().slice(-6)}
-
-Your message has been forwarded to support team.
-We'll get back to you shortly.
-
-📌 *Next Steps:*
-1. Wait for admin response
-2. Check notifications
-3. Reply in this chat
-
-Thank you for your patience!`,
-            { parse_mode: "Markdown" }
-        );
-
-        // Clear session
-        global.userSessions.delete(`support_${userId}`);
-
-        return true;
-    } catch (error) {
-        console.error("Support message error:", error);
-        await bot.sendMessage(chatId, "❌ Error submitting ticket. Please try again.");
-        return true;
+    
+    const { userId, chatId } = conversation;
+    
+    // Check if user is blocked
+    const user = await db.getUser(userId);
+    if (user && user.is_blocked) {
+        await bot.sendMessage(adminId, '❌ This user is blocked. Unblock them first to reply.');
+        return;
     }
+    
+    await bot.sendMessage(chatId,
+        `🆘 Support Response:\n\n${replyText}`,
+        {
+            reply_markup: {
+                inline_keyboard: [
+                    [{ text: '📝 Reply', callback_data: 'support' }]
+                ]
+            }
+        }
+    );
+    
+    await bot.sendMessage(adminId, '✅ Reply sent to user.');
 }
 
-async function adminReplyToSupport(bot, userId, reply) {
-    try {
-        await bot.sendMessage(userId,
-            `📨 *Support Reply*
-
-${reply}
-
-If you have further questions, please reply to this message.`,
-            { parse_mode: "Markdown" }
-        );
-
-        // Update ticket status
-        await query(
-            "UPDATE support_tickets SET admin_reply = ?, status = 'closed' WHERE user_id = ? AND status = 'open' ORDER BY id DESC LIMIT 1",
-            [reply, userId]
-        );
-
-        return true;
-    } catch (error) {
-        console.error("Admin reply error:", error);
-        return false;
-    }
-}
-
-module.exports = { support, processSupportMessage, adminReplyToSupport };
+module.exports = {
+    startSupport,
+    forwardToAdmin,
+    handleAdminReply
+};
