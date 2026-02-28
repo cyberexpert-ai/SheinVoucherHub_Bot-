@@ -1,80 +1,62 @@
-# 🤖 SheinVoucherHub_Bot
+# Shein Voucher Hub Bot
 
-Advanced Telegram Bot for Shein Voucher Sales with Complete Admin Panel
+Advanced Telegram bot for purchasing and managing Shein vouchers.
 
-## 📋 Features
+## Features
 
-### 🔐 Force Join System
-- Must join @SheinVoucherHub and @OrdersNotify
-- Auto verification on every command
-- If leaves → bot stops working
-- Shows join buttons with verify option
+### User Features
+- 🛒 Buy vouchers with multiple quantity options
+- 🔁 Recover purchased vouchers
+- 📦 View order history
+- 🆘 Support system
+- 📜 Disclaimer information
 
-### 🛒 Buy Voucher System
-- Multiple categories (₹500, ₹1000, ₹2000, ₹4000)
-- Dynamic pricing based on quantity
-- Live stock display
-- Custom quantity option (1-100)
-- Cannot exceed available stock
-- Price calculation based on quantity
+### Admin Features
+- 📊 Dashboard with statistics
+- 📂 Category management
+- 🎟 Voucher management (add single/bulk)
+- 💰 Price management
+- 👥 User management (block/unblock)
+- 📦 Order management
+- 📢 Broadcast messages
+- 🏷 Discount codes
+- 🔒 Security & fraud detection
 
-### 💳 Payment System
-- QR code payment display
-- Screenshot upload required
-- UTR/Transaction ID verification
-- Duplicate UTR prevention
-- Fake payment detection with auto-block
-- Payment validation system
+## Deployment on Render
 
-### 📦 Order System
-- Unique Order ID: `SVH-XXXXXXX-XXXXXX`
-- 2-hour recovery window
-- Status tracking (Pending/Success/Rejected/Expired)
-- Copy voucher codes with one tap
-- Order history view
+1. Fork this repository
+2. Create a new Web Service on Render
+3. Connect your repository
+4. Set environment variables:
+   - `BOT_TOKEN`: Your Telegram bot token
+   - `ADMIN_ID`: Admin Telegram ID
+   - `DB_HOST`: Database host
+   - `DB_USER`: Database user
+   - `DB_PASSWORD`: Database password
+   - `DB_NAME`: Database name
+5. Deploy!
 
-### 🔁 Recovery System
-- Get codes within 2 hours of purchase
-- Same Telegram ID required
-- Automatic expiry after 2 hours
-- Max 3 recovery attempts
-- Admin can manually recover
+## Database Setup
 
-### 👑 Admin Panel
-- Category Management (Add/Edit/Delete/Toggle)
-- Code Management (Add single/bulk, delete, export)
-- User Management (Block/Unblock/Temp Ban, message)
-- Broadcast Messages (text/photo)
-- Order Management (Accept/Reject with reason)
-- Support Ticket System with reply
-- Full Statistics Dashboard
-- Price Management per quantity
+Run the `src/database/init.sql` script to create all required tables.
 
-### 📊 Database
-- MySQL Database with all tables
-- All data persistent
-- Automatic order expiry cleanup
-- Anti-fraud system with UTR blacklist
-- User blocking system
+## Commands
 
-### 🔒 Security Features
-- Channel verification required
-- Block system (temporary/permanent)
-- UTR blacklist
-- Duplicate order prevention
-- Anti-fraud detection
+### User Commands
+- `/start` - Start the bot
+
+### Admin Panel Access
+- Send any message to admin after starting the bot
+
+## Security Features
+
+- Force channel join
+- UTR duplicate detection
+- Warning system
+- Temporary blocks
+- Fraud logging
 - Rate limiting
-- Session management
-- Auto message deletion
 
-## 🚀 Installation
+## Support
 
-### Prerequisites
-- Node.js v16 or higher
-- MySQL Database (InfinityFree or any)
-- Telegram Bot Token (from @BotFather)
-
-### Step 1: Clone Repository
-```bash
-git clone https://github.com/yourusername/SheinVoucherHub_Bot.git
-cd SheinVoucherHub_Bot
+For issues or questions, contact @SheinSupportRobot
