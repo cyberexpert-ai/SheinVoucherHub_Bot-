@@ -1,87 +1,88 @@
-const moment = require("moment");
+const moment = require('moment');
 
 function generateOrderId() {
-    const dateStr = moment().format('YYYYMMDD');
-    const randomStr = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const randomNum = Math.floor(Math.random() * 1000000).toString().padStart(6, '0');
-    return `SVH-${dateStr}-${randomNum}`;
+    const prefix = 'SVH';
+    const date = moment().format('YYYYMMDD');
+    const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const unique = Math.random().toString(36).substring(2, 8).toUpperCase();
+    
+    return `${prefix}-${date}-${random}${unique}`;
 }
 
 function formatCurrency(amount) {
     return `₹${amount.toFixed(2)}`;
 }
 
-function escapeMarkdown(text) {
-    return text.replace(/([_*[\]()~`>#+\-=|{}.!])/g, '\\$1');
+function formatDate(date) {
+    return moment(date).format('DD MMM YYYY, hh:mm A');
 }
 
-function splitArray(array, chunkSize) {
+function truncate(str, length) {
+    if (str.length <= length) return str;
+    return str.substring(0, length) + '...';
+}
+
+function validateUtr(utr) {
+    // Basic UTR validation - can be enhanced
+    const utrRegex = /^[A-Za-z0-9]{6,30}$/;
+    return utrRegex.test(utr);
+}
+
+function validateOrderId(orderId) {
+    const orderRegex = /^SVH-\d{8}-[A-Z0-9]{12}$/;
+    return orderRegex.test(orderId);
+}
+
+function sanitizeMessage(text) {
+    // Remove any potentially harmful characters
+    return text.replace(/[<>]/g, '');
+}
+
+function escapeMarkdown(text) {
+    return text.replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+}
+
+function chunkArray(array, size) {
     const chunks = [];
-    for (let i = 0; i < array.length; i += chunkSize) {
-        chunks.push(array.slice(i, i + chunkSize));
+    for (let i = 0; i < array.length; i += size) {
+        chunks.push(array.slice(i, i + size));
     }
     return chunks;
 }
 
-function calculatePrice(category, quantity) {
-    // Base price calculation
-    const basePrice = parseInt(category) / 10; // Rough calculation
-    
-    let price;
-    if (quantity === 1) {
-        price = basePrice;
-    } else if (quantity === 5) {
-        price = basePrice * 5 - 1;
-    } else {
-        price = basePrice * quantity * 0.95; // 5% discount for bulk
-    }
-    
-    // Round to pattern
-    if (price < 100) {
-        price = Math.floor(price / 10) * 10 + 9;
-    } else if (price < 1000) {
-        price = Math.floor(price / 100) * 100 + 99;
-    } else {
-        price = Math.floor(price / 1000) * 1000 + 999;
-    }
-    
-    return Math.floor(price);
+async function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-function validateUTR(utr) {
-    // Basic UTR validation
-    // Can be enhanced based on actual UTR format
-    const utrRegex = /^[A-Z0-9]{12,22}$/i;
-    return utrRegex.test(utr);
-}
-
-function sanitizeInput(input) {
-    if (!input) return '';
-    return input.toString().trim().replace(/[<>]/g, '');
-}
-
-function formatTimeLeft(expiryTime) {
-    const now = moment();
-    const expiry = moment(expiryTime);
-    const duration = moment.duration(expiry.diff(now));
+function calculateTotalPrice(category, quantity, priceTiers) {
+    // Find closest tier or calculate dynamically
+    const tier = priceTiers.find(t => t.quantity === quantity);
+    if (tier) return tier.price;
     
-    const hours = Math.floor(duration.asHours());
-    const minutes = duration.minutes();
+    // Calculate based on base price
+    const basePrice = category.value === 500 ? 49 :
+                      category.value === 1000 ? 99 :
+                      category.value === 2000 ? 199 : 299;
     
-    if (hours > 0) {
-        return `${hours}h ${minutes}m`;
-    } else {
-        return `${minutes}m`;
-    }
+    let price = basePrice * quantity;
+    
+    // Apply bulk discounts
+    if (quantity > 80) price = price * 0.98; // 2% discount
+    else if (quantity > 50) price = price * 0.99; // 1% discount
+    
+    return Math.round(price);
 }
 
 module.exports = {
     generateOrderId,
     formatCurrency,
+    formatDate,
+    truncate,
+    validateUtr,
+    validateOrderId,
+    sanitizeMessage,
     escapeMarkdown,
-    splitArray,
-    calculatePrice,
-    validateUTR,
-    sanitizeInput,
-    formatTimeLeft
+    chunkArray,
+    delay,
+    calculateTotalPrice
 };
