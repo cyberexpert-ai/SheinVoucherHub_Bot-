@@ -1,187 +1,173 @@
-const { query } = require("../../database/database");
-const moment = require("moment");
+const db = require('../../database/database');
+const helpers = require('../../utils/helpers');
+const constants = require('../../utils/constants');
 
-async function recoverVoucher(bot, msg) {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-
-    const message = await bot.sendMessage(chatId,
-        `🔁 *Recover Vouchers*
-
-Send your Order ID
-
-Example: \`SVH-1234567890-ABC123\`
-
-⚠️ *Important:*
-• Order ID must match your Telegram ID
-• Recovery available for 2 hours after order
-• After 2 hours, orders expire automatically`,
+async function startRecovery(bot, chatId, userId) {
+    const msg = await bot.sendMessage(chatId,
+        `🔁 Recover Vouchers\n\n` +
+        `Send your Order ID\n` +
+        `Example: SVH-20260130-54C98D\n\n` +
+        `⏰ Recovery available for 2 hours after order.`,
         {
-            parse_mode: "Markdown",
             reply_markup: {
-                force_reply: true
+                force_reply: true,
+                selective: true
             }
         }
     );
-
-    // Store session for recovery
-    if (!global.userSessions) global.userSessions = new Map();
-    global.userSessions.set(`recover_${userId}`, {
-        step: "waiting_order_id",
-        messageId: message.message_id
-    });
+    
+    global.waitingFor = global.waitingFor || {};
+    global.waitingFor[userId] = {
+        type: 'recovery_order_id',
+        messageId: msg.message_id
+    };
 }
 
 async function processRecovery(bot, chatId, userId, orderId) {
-    // Check if order exists and belongs to user
-    const order = await query(`
-        SELECT * FROM orders 
-        WHERE order_id = ? AND user_id = ?
-    `, [orderId, userId]);
-
-    if (order.length === 0) {
-        // Check if order exists but belongs to someone else
-        const otherOrder = await query(
-            "SELECT * FROM orders WHERE order_id = ?",
-            [orderId]
-        );
-
-        if (otherOrder.length > 0) {
-            // Order exists but not for this user
-            await bot.sendMessage(chatId,
-                `⚠️ *Recovery Failed*
-
-This Order ID belongs to another account.
-
-Recovery is only available for the original purchasing account.
-
-If you think this is a mistake, contact support.`,
-                { parse_mode: "Markdown" }
-            );
-
-            // Flag potential fraud
-            await logFraudAttempt(userId, orderId, "WRONG_ACCOUNT_RECOVERY");
-        } else {
-            // Order doesn't exist
-            await bot.sendMessage(chatId,
-                `⚠️ *Order not found:* \`${orderId}\`
-
-Please check your Order ID and try again.
-
-Format: SVH-XXXXXXXX-XXXXXX`,
-                { parse_mode: "Markdown" }
-            );
-        }
-        return;
-    }
-
-    // Check if order is expired
-    const orderData = order[0];
-    const expiresAt = moment(orderData.expires_at);
-    
-    if (moment().isAfter(expiresAt)) {
+    // Validate order ID format
+    if (!helpers.validateOrderId(orderId)) {
         await bot.sendMessage(chatId,
-            `⌛ *Recovery Failed*
-
-Your order \`${orderId}\` has expired.
-
-Orders are only recoverable within 2 hours of purchase.
-
-If you need assistance, please contact support.`,
-            { parse_mode: "Markdown" }
-        );
-        return;
-    }
-
-    // Check order status
-    if (orderData.status === "pending") {
-        await bot.sendMessage(chatId,
-            `⏳ *Order Pending*
-
-Your order \`${orderId}\` is still pending admin approval.
-
-Please wait for admin to process your order.
-
-Estimated time: 5-30 minutes`,
-            { parse_mode: "Markdown" }
-        );
-        return;
-    }
-
-    if (orderData.status === "rejected") {
-        await bot.sendMessage(chatId,
-            `❌ *Order Rejected*
-
-Your order \`${orderId}\` was rejected.
-
-Reason: ${orderData.admin_note || "No reason provided"}
-
-If you need assistance, contact support.`,
-            { parse_mode: "Markdown" }
-        );
-        return;
-    }
-
-    if (orderData.status === "success") {
-        // Resend voucher codes
-        await bot.sendMessage(chatId,
-            `✅ *Voucher Recovered*
-
-Order ID: \`${orderId}\`
-Category: ₹${orderData.category_name} x${orderData.quantity}
-Purchase Date: ${moment(orderData.created_at).format('DD/MM/YYYY HH:mm')}
-
-🎫 *Your Voucher Codes:*
-
-\`${orderData.voucher_codes}\`
-
-📋 *Instructions:*
-1. Copy the code above
-2. Apply at Shein checkout
-3. Maximum discount: ₹${orderData.category_name} per item`,
+            `❌ Invalid order ID format.\n` +
+            `Please use format: SVH-YYYYMMDD-XXXXXX`,
             {
-                parse_mode: "Markdown",
+                reply_markup: {
+                    keyboard: [[constants.BUTTONS.BACK]],
+                    resize_keyboard: true
+                }
+            }
+        );
+        return;
+    }
+    
+    // Check if user is trying to recover someone else's order
+    const order = await db.getOrder(orderId);
+    
+    if (!order) {
+        await bot.sendMessage(chatId,
+            helpers.format(constants.ERRORS.ORDER_NOT_FOUND, orderId),
+            {
+                reply_markup: {
+                    keyboard: [[constants.BUTTONS.BACK]],
+                    resize_keyboard: true
+                }
+            }
+        );
+        
+        // Log fake recovery attempt
+        await db.query(
+            'INSERT INTO user_warnings (user_id, reason, warning_type) VALUES (?, ?, ?)',
+            [userId, `Fake recovery attempt: ${orderId}`, 'fake_recovery']
+        );
+        
+        return;
+    }
+    
+    // Check if order belongs to this user
+    if (order.user_id != userId) {
+        await bot.sendMessage(chatId,
+            `❌ This order ID belongs to a different account.\n` +
+            `Recovery is only available for your own orders.`,
+            {
+                reply_markup: {
+                    keyboard: [[constants.BUTTONS.BACK]],
+                    resize_keyboard: true
+                }
+            }
+        );
+        
+        // Log unauthorized access attempt
+        await db.query(
+            'INSERT INTO user_warnings (user_id, reason, warning_type) VALUES (?, ?, ?)',
+            [userId, `Unauthorized recovery attempt: ${orderId}`, 'other']
+        );
+        
+        return;
+    }
+    
+    // Check if recovery is still active (within 2 hours)
+    const recoveryExpiry = new Date(order.recovery_expires);
+    const now = new Date();
+    
+    if (now > recoveryExpiry) {
+        await bot.sendMessage(chatId,
+            `⏰ This recovery link has expired.\n` +
+            `Orders are recoverable for 2 hours only.\n\n` +
+            `Please contact support if you need help.`,
+            {
                 reply_markup: {
                     inline_keyboard: [
-                        [{ text: "📋 Copy Code", callback_data: `copy_${orderId}` }],
-                        [{ text: "↩️ Back", callback_data: "back_to_main" }]
+                        [{ text: '🆘 Contact Support', callback_data: 'support' }]
                     ]
                 }
             }
         );
         return;
     }
-}
-
-async function logFraudAttempt(userId, orderId, type) {
-    try {
-        await query(
-            "INSERT INTO fraud_logs (user_id, order_id, fraud_type, created_at) VALUES (?, ?, ?, NOW())",
-            [userId, orderId, type]
+    
+    // Check if order is completed
+    if (order.status !== 'completed') {
+        await bot.sendMessage(chatId,
+            `⏳ This order is still ${order.status}.\n` +
+            `Recovery is only available for completed orders.`,
+            {
+                reply_markup: {
+                    keyboard: [[constants.BUTTONS.BACK]],
+                    resize_keyboard: true
+                }
+            }
         );
-
-        // Check for multiple attempts
-        const attempts = await query(
-            "SELECT COUNT(*) as count FROM fraud_logs WHERE user_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)",
-            [userId]
-        );
-
-        if (attempts[0].count >= 3) {
-            // Temp block user for fraud
-            await query(
-                "INSERT INTO temp_block (user_id, reason, blocked_until) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 30 MINUTE))",
-                [userId, "Multiple fraud attempts detected"]
-            );
-
-            // Notify admin
-            await bot.sendMessage(process.env.ADMIN_ID,
-                `🚨 *Fraud Alert*\n\nUser: ${userId}\nType: ${type}\nAttempts: ${attempts[0].count}\nAction: Temp blocked 30 min`,
-                { parse_mode: "Markdown" }
-            );
-        }
-    } catch (error) {
-        console.error("Fraud logging error:", error);
+        return;
     }
+    
+    // Get vouchers for this order
+    const vouchers = await db.query(
+        'SELECT voucher_code FROM order_vouchers WHERE order_id = ?',
+        [orderId]
+    );
+    
+    if (!vouchers.length) {
+        await bot.sendMessage(chatId,
+            `❌ No vouchers found for this order.\n` +
+            `Please contact support.`,
+            {
+                reply_markup: {
+                    inline_keyboard: [
+                        [{ text: '🆘 Contact Support', callback_data: 'support' }]
+                    ]
+                }
+            }
+        );
+        return;
+    }
+    
+    // Send vouchers to user
+    let message = `✅ Order Found!\n\n`;
+    message += `Order ID: ${orderId}\n`;
+    message += `Category: ${order.category_name}\n`;
+    message += `Quantity: ${order.quantity}\n`;
+    message += `\n📋 Your Voucher Codes:\n\n`;
+    
+    const codeList = vouchers.map(v => v.voucher_code).join('\n');
+    message += codeList;
+    
+    // Create copy buttons
+    const buttons = [];
+    for (let i = 0; i < vouchers.length; i++) {
+        buttons.push([{
+            text: `📋 Copy Code ${i+1}`,
+            callback_data: `copy_code_${vouchers[i].voucher_code}`
+        }]);
+    }
+    buttons.push([{ text: constants.BUTTONS.BACK, callback_data: 'back_main' }]);
+    
+    await bot.sendMessage(chatId, message, {
+        reply_markup: {
+            inline_keyboard: buttons
+        }
+    });
 }
 
-module.exports = { recoverVoucher, processRecovery };
+module.exports = {
+    startRecovery,
+    processRecovery
+};
