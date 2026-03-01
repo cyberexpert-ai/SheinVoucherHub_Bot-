@@ -1,101 +1,73 @@
-const db = require('../../database/database');
-const helpers = require('../../utils/helpers');
-const constants = require('../../utils/constants');
+const { Markup } = require('telegraf');
+const moment = require('moment');
 
-async function showOrders(bot, chatId, userId) {
-    const orders = await db.getUserOrders(userId, 10);
+async function showOrders(ctx) {
+  try {
+    const userId = ctx.from.id;
     
-    if (!orders.length) {
-        const msg = await bot.sendMessage(chatId, constants.ERRORS.NO_ORDERS, {
-            reply_markup: {
-                keyboard: [[constants.BUTTONS.BACK]],
-                resize_keyboard: true,
-                one_time_keyboard: true
-            }
-        });
-        global.lastMessages[userId] = msg.message_id;
-        return;
-    }
-    
-    let message = '📦 Your Orders\n━━━━━━━━━━━━━━━━\n\n';
-    
-    for (const order of orders) {
-        const statusEmoji = order.status === 'completed' ? '✅' :
-                           order.status === 'pending' ? '⏳' :
-                           order.status === 'rejected' ? '❌' : '⌛';
-        
-        message += `${statusEmoji} ${order.order_id}\n`;
-        message += `🎟 ${order.category_name} | Qty ${order.quantity}\n`;
-        message += `💰 ${helpers.formatCurrency(order.total_price)} | ${order.status.toUpperCase()}\n`;
-        
-        if (order.status === 'completed' && order.vouchers) {
-            const voucherList = order.vouchers.split(',');
-            message += `📋 Codes: ${voucherList.length} available\n`;
+    const orders = await global.pool.query(`
+      SELECT o.*, c.name as category_name, 
+             array_agg(v.code) as voucher_codes
+      FROM orders o
+      LEFT JOIN categories c ON o.category_id = c.id
+      LEFT JOIN order_vouchers ov ON o.order_id = ov.order_id
+      LEFT JOIN vouchers v ON ov.voucher_id = v.id
+      WHERE o.user_id = $1
+      GROUP BY o.id, o.order_id, c.name
+      ORDER BY o.created_at DESC
+      LIMIT 10
+    `, [userId]);
+
+    if (orders.rows.length === 0) {
+      return ctx.reply(
+        "📦 *You don't have any orders yet.*\n\n" +
+        "Start buying vouchers now!",
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [Markup.button.callback('🛒 Buy Voucher', 'buy_voucher')],
+              [Markup.button.callback('🔙 Back', 'back_to_main')]
+            ]
+          }
         }
-        
-        message += '━━━━━━━━━━━━━━━━\n\n';
+      );
     }
+
+    let message = "📦 *Your Orders*\n\n";
     
-    const msg = await bot.sendMessage(chatId, message, {
-        parse_mode: 'HTML',
-        reply_markup: {
-            keyboard: [[constants.BUTTONS.BACK]],
-            resize_keyboard: true,
-            one_time_keyboard: true
-        }
+    for (const order of orders.rows) {
+      const statusEmoji = order.status === 'completed' ? '✅' : 
+                         order.status === 'pending' ? '⏳' : '❌';
+      
+      message += 
+        `🧾 *Order ID:* \`${order.order_id}\`\n` +
+        `🎟 *Category:* ${order.category_name} | Qty: ${order.quantity}\n` +
+        `💰 *Amount:* ₹${order.total_amount} | ${statusEmoji} ${order.status}\n`;
+      
+      if (order.status === 'completed' && order.voucher_codes && order.voucher_codes[0]) {
+        message += `🔑 *Voucher:* \`${order.voucher_codes[0]}\`\n`;
+      }
+      
+      message += `📅 *Date:* ${moment(order.created_at).format('DD/MM/YYYY HH:mm')}\n\n`;
+    }
+
+    const buttons = [
+      [Markup.button.callback('🔄 Refresh', 'my_orders')],
+      [Markup.button.callback('🔙 Back', 'back_to_main')]
+    ];
+
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: buttons
+      }
     });
-    
-    global.lastMessages[userId] = msg.message_id;
+
+  } catch (error) {
+    console.error('Show orders error:', error);
+    ctx.reply('An error occurred. Please try again.');
+  }
 }
 
-async function showOrderDetail(bot, chatId, userId, orderId) {
-    const order = await db.getOrder(orderId);
-    
-    if (!order || order.user_id != userId) {
-        await bot.sendMessage(chatId, '❌ Order not found.');
-        return;
-    }
-    
-    let message = `🧾 Order Details\n`;
-    message += `━━━━━━━━━━━━━━━━\n`;
-    message += `Order ID: ${order.order_id}\n`;
-    message += `Date: ${helpers.formatDate(order.created_at)}\n`;
-    message += `Category: ${order.category_name}\n`;
-    message += `Quantity: ${order.quantity}\n`;
-    message += `Total: ${helpers.formatCurrency(order.total_price)}\n`;
-    message += `Status: ${order.status.toUpperCase()}\n`;
-    
-    if (order.status === 'completed') {
-        const vouchers = order.vouchers ? order.vouchers.split(',') : [];
-        message += `\n📋 Voucher Codes:\n`;
-        
-        const buttons = [];
-        for (let i = 0; i < vouchers.length; i++) {
-            buttons.push([{
-                text: `📋 Copy Code ${i+1}`,
-                callback_data: `copy_code_${vouchers[i].trim()}`
-            }]);
-        }
-        
-        const msg = await bot.sendMessage(chatId, message, {
-            reply_markup: {
-                inline_keyboard: buttons
-            }
-        });
-        global.lastMessages[userId] = msg.message_id;
-    } else {
-        const msg = await bot.sendMessage(chatId, message, {
-            reply_markup: {
-                keyboard: [[constants.BUTTONS.BACK]],
-                resize_keyboard: true,
-                one_time_keyboard: true
-            }
-        });
-        global.lastMessages[userId] = msg.message_id;
-    }
-}
-
-module.exports = {
-    showOrders,
-    showOrderDetail
-};
+module.exports = { showOrders };
