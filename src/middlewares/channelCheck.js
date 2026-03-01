@@ -1,90 +1,98 @@
-const db = require('../database/database');
+const { Markup } = require('telegraf');
 
-const CHANNELS = [
-    { username: '@SheinVoucherHub', id: process.env.CHANNEL_1_ID },
-    { username: '@OrdersNotify', id: process.env.CHANNEL_2_ID }
-];
+async function checkMembership(ctx) {
+  try {
+    const userId = ctx.from.id;
+    const channels = [
+      process.env.CHANNEL_1,
+      process.env.CHANNEL_2
+    ].filter(Boolean);
 
-async function checkChannelMembership(bot, userId) {
-    try {
-        for (const channel of CHANNELS) {
-            try {
-                const chatMember = await bot.getChatMember(channel.username, userId);
-                
-                const validStatuses = ['member', 'administrator', 'creator'];
-                if (!validStatuses.includes(chatMember.status)) {
-                    return {
-                        joined: false,
-                        channel: channel.username
-                    };
-                }
-            } catch (error) {
-                console.error(`Error checking channel ${channel.username}:`, error);
-                return {
-                    joined: false,
-                    channel: channel.username,
-                    error: true
-                };
-            }
+    for (const channel of channels) {
+      try {
+        const chatMember = await ctx.telegram.getChatMember(channel, userId);
+        
+        // Check if user is member/administrator/creator
+        const validStatuses = ['member', 'administrator', 'creator'];
+        if (!validStatuses.includes(chatMember.status)) {
+          return false;
         }
-        
-        return { joined: true };
-    } catch (error) {
-        console.error('Channel check error:', error);
-        return { joined: false, error: true };
+      } catch (error) {
+        console.error(`Channel check error for ${channel}:`, error);
+        // If we can't check, assume not a member
+        return false;
+      }
     }
+
+    // Update user verified status
+    await global.pool.query(
+      `UPDATE users SET verified = TRUE WHERE user_id = $1`,
+      [userId]
+    );
+
+    return true;
+    
+  } catch (error) {
+    console.error('Membership check error:', error);
+    return false;
+  }
 }
 
-async function forceJoinMiddleware(bot, msg, next) {
-    const userId = msg.from.id;
-    
+async function channelCheck(ctx, next) {
+  try {
     // Skip check for admin
-    if (userId.toString() === process.env.ADMIN_ID) {
+    if (ctx.from.id.toString() === process.env.ADMIN_ID) {
+      return next();
+    }
+
+    // Check if user is already verified in our database
+    const userCheck = await global.pool.query(
+      'SELECT verified FROM users WHERE user_id = $1',
+      [ctx.from.id]
+    );
+
+    if (userCheck.rows.length > 0 && userCheck.rows[0].verified) {
+      // User was previously verified, but double-check membership
+      const isStillMember = await checkMembership(ctx);
+      if (isStillMember) {
         return next();
+      }
     }
+
+    // Check current membership
+    const isMember = await checkMembership(ctx);
     
-    // Check if user is blocked
-    const user = await db.getUser(userId);
-    if (user && user.is_blocked) {
-        const blockMsg = user.block_expires && new Date(user.block_expires) > new Date()
-            ? `⛔️ You are temporarily blocked until ${new Date(user.block_expires).toLocaleString()}\nReason: ${user.block_reason || 'No reason provided'}`
-            : `⛔️ You are permanently blocked.\nReason: ${user.block_reason || 'No reason provided'}`;
-        
-        await bot.sendMessage(userId, blockMsg, {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '🆘 Contact Support', callback_data: 'support' }]
-                ]
-            }
-        });
-        return;
+    if (!isMember) {
+      const joinButtons = [];
+      
+      if (process.env.CHANNEL_1) {
+        joinButtons.push([Markup.button.url('📢 Join Channel 1', `https://t.me/${process.env.CHANNEL_1.replace('@', '')}`)]);
+      }
+      if (process.env.CHANNEL_2) {
+        joinButtons.push([Markup.button.url('📢 Join Channel 2', `https://t.me/${process.env.CHANNEL_2.replace('@', '')}`)]);
+      }
+      
+      joinButtons.push([Markup.button.callback('✅ Verify Join', 'verify_join')]);
+
+      await ctx.reply(
+        "👋 *Welcome to Shein Voucher Bot*\n\n" +
+        "📢 Please join our channels to continue.",
+        {
+          parse_mode: "Markdown",
+          reply_markup: {
+            inline_keyboard: joinButtons
+          }
+        }
+      );
+      return;
     }
+
+    return next();
     
-    const membership = await checkChannelMembership(bot, userId);
-    
-    if (!membership.joined) {
-        const message = await bot.sendMessage(userId, 
-            `👋 Welcome to Shein Codes Bot\n\n📢 Please join ${membership.channel || 'our channels'} to continue.\n\nAfter joining, tap verify ✅`,
-            {
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '✅ Verify', callback_data: 'verify_channels' }]
-                    ]
-                }
-            }
-        );
-        
-        // Store message ID for auto-delete
-        global.pendingVerification = global.pendingVerification || {};
-        global.pendingVerification[userId] = message.message_id;
-        
-        return;
-    }
-    
-    next();
+  } catch (error) {
+    console.error('Channel check middleware error:', error);
+    return next();
+  }
 }
 
-module.exports = {
-    forceJoinMiddleware,
-    checkChannelMembership
-};
+module.exports = { channelCheck, checkMembership };
