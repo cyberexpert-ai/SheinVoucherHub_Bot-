@@ -53,12 +53,10 @@ global.logger = logger;
 // Apply middlewares
 bot.use(async (ctx, next) => {
   try {
-    // Skip for callback queries (handled separately)
     if (ctx.callbackQuery) {
       return next();
     }
     
-    // Check if user is blocked
     if (ctx.from) {
       const userCheck = await pool.query(
         'SELECT status, block_reason, block_expiry FROM users WHERE user_id = $1',
@@ -68,7 +66,6 @@ bot.use(async (ctx, next) => {
       if (userCheck.rows.length > 0) {
         const user = userCheck.rows[0];
         
-        // Check if user is permanently blocked
         if (user.status === 'blocked_permanent') {
           await deleteOldMessage(ctx);
           return ctx.reply(
@@ -87,7 +84,6 @@ bot.use(async (ctx, next) => {
           );
         }
         
-        // Check if user is temporarily blocked
         if (user.status === 'blocked_temp' && user.block_expiry) {
           const now = new Date();
           if (new Date(user.block_expiry) > now) {
@@ -108,7 +104,6 @@ bot.use(async (ctx, next) => {
               }
             );
           } else {
-            // Unblock user if expiry passed
             await pool.query(
               'UPDATE users SET status = $1, block_reason = NULL, block_expiry = NULL WHERE user_id = $2',
               ['active', ctx.from.id]
@@ -125,7 +120,6 @@ bot.use(async (ctx, next) => {
   }
 });
 
-// Apply channel check middleware (except for callbacks)
 bot.use(async (ctx, next) => {
   if (ctx.callbackQuery) return next();
   if (ctx.message?.text?.startsWith('/')) {
@@ -134,7 +128,6 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-// Delete old message middleware
 bot.use(async (ctx, next) => {
   if (ctx.chat && ctx.message) {
     await deleteOldMessage(ctx);
@@ -142,18 +135,20 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
+// Import command modules
+const startCommand = require('./commands/start');
+const adminCommands = require('./commands/admin');
+const userCommands = require('./commands/user');
+
 // Register command handlers
 bot.start(async (ctx) => {
-  const { startCommand } = require('./commands/start');
-  await startCommand(ctx);
+  await startCommand.startCommand(ctx);
 });
 
-// Admin commands
-const adminCommands = require('./commands/admin');
+// Register admin commands
 adminCommands.register(bot);
 
-// User commands
-const userCommands = require('./commands/user');
+// Register user commands
 userCommands.register(bot);
 
 // Handle messages
@@ -161,39 +156,31 @@ bot.on('text', async (ctx) => {
   await messageHandler(ctx);
 });
 
-// Handle callback queries
 bot.on('callback_query', async (ctx) => {
   await callbackHandler(ctx);
 });
 
-// Handle photo messages (for payment screenshots)
 bot.on('photo', async (ctx) => {
   await paymentHandler.handleScreenshot(ctx);
 });
 
-// Handle document messages
 bot.on('document', async (ctx) => {
   await paymentHandler.handleDocument(ctx);
 });
 
-// Error handler
 bot.catch((err, ctx) => {
   logger.error('Bot error:', err);
   ctx.reply('An error occurred. Please try again later.').catch(e => {});
 });
 
-// Initialize database and start bot
 async function startBot() {
   try {
-    // Initialize database tables
     await initDatabase();
     logger.info('Database initialized successfully');
     
-    // Launch bot
     await bot.launch();
     logger.info('Bot started successfully');
     
-    // Start express server
     const PORT = process.env.PORT || 3000;
     app.listen(PORT, () => {
       logger.info(`Server started on port ${PORT}`);
@@ -207,7 +194,6 @@ async function startBot() {
 
 startBot();
 
-// Enable graceful stop
 process.once('SIGINT', () => {
   bot.stop('SIGINT');
   pool.end();
