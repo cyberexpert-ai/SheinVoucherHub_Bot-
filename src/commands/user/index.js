@@ -1,3 +1,4 @@
+// src/commands/user/index.js
 const buyVoucher = require('./buyVoucher');
 const myOrders = require('./myOrders');
 const recoverVoucher = require('./recoverVoucher');
@@ -40,4 +41,5 @@ function register(bot) {
   });
 }
 
+// Export the register function
 module.exports = { register };
