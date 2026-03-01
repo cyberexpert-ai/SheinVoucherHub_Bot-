@@ -1,42 +1,26 @@
-const db = require('../database/database');
-
-async function isAdmin(userId) {
-    if (userId.toString() === process.env.ADMIN_ID) return true;
+async function authMiddleware(ctx, next) {
+  // Check if user exists in database
+  try {
+    const userId = ctx.from?.id;
     
-    const user = await db.getUser(userId);
-    return user && user.is_admin === true;
-}
-
-async function adminMiddleware(bot, msg, next) {
-    const userId = msg.from.id;
-    
-    if (!await isAdmin(userId)) {
-        await bot.sendMessage(userId, '⛔️ Access denied. Admin only.');
-        return;
+    if (!userId) {
+      return next();
     }
+
+    // Update last active timestamp
+    await global.pool.query(
+      `UPDATE users 
+       SET last_active = CURRENT_TIMESTAMP 
+       WHERE user_id = $1`,
+      [userId]
+    );
+
+    return next();
     
-    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    return next();
+  }
 }
 
-async function userExistsMiddleware(bot, msg, next) {
-    const userId = msg.from.id;
-    
-    const user = await db.getUser(userId);
-    if (!user) {
-        // Create user if not exists
-        await db.createOrUpdateUser({
-            telegram_id: userId,
-            username: msg.from.username,
-            first_name: msg.from.first_name,
-            last_name: msg.from.last_name
-        });
-    }
-    
-    next();
-}
-
-module.exports = {
-    isAdmin,
-    adminMiddleware,
-    userExistsMiddleware
-};
+module.exports = { authMiddleware };
