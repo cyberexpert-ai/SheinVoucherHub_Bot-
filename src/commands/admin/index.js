@@ -1,42 +1,108 @@
-const db = require('../../database/database');
-const helpers = require('../../utils/helpers');
-const constants = require('../../utils/constants');
+const category = require('./category');
+const voucher = require('./voucher');
+const price = require('./price');
+const userManage = require('./userManage');
+const orderManage = require('./orderManage');
+const broadcast = require('./broadcast');
+const discount = require('./discount');
+const stats = require('./stats');
+const security = require('./security');
 
-async function showAdminPanel(bot, chatId, userId) {
-    const stats = {
-        users: await db.query('SELECT COUNT(*) as count FROM users'),
-        orders: await db.query('SELECT COUNT(*) as count FROM orders'),
-        pending: await db.query('SELECT COUNT(*) as count FROM orders WHERE status = "pending"'),
-        revenue: await db.query('SELECT COALESCE(SUM(total_price), 0) as total FROM orders WHERE status = "completed"'),
-        stock: await db.query('SELECT COUNT(*) as count FROM vouchers WHERE is_used = FALSE')
+function register(bot) {
+  // Admin menu
+  bot.command('admin', async (ctx) => {
+    const adminId = parseInt(process.env.ADMIN_ID);
+    if (ctx.from.id !== adminId) {
+      return ctx.reply('⛔ Unauthorized access.');
+    }
+    
+    const message = 
+      "👑 *Admin Panel*\n\n" +
+      "Select an option:";
+
+    const keyboard = {
+      inline_keyboard: [
+        [ { text: '📊 Category Management', callback_data: 'admin_category' } ],
+        [ { text: '🎟 Voucher Management', callback_data: 'admin_voucher' } ],
+        [ { text: '💰 Price Management', callback_data: 'admin_price' } ],
+        [ { text: '👥 User Management', callback_data: 'admin_users' } ],
+        [ { text: '📦 Order Management', callback_data: 'admin_orders' } ],
+        [ { text: '📢 Broadcast', callback_data: 'admin_broadcast' } ],
+        [ { text: '🏷 Discount Codes', callback_data: 'admin_discount' } ],
+        [ { text: '📈 Statistics', callback_data: 'admin_stats' } ],
+        [ { text: '🔒 Security', callback_data: 'admin_security' } ]
+      ]
     };
-    
-    const message = `👑 Admin Panel\n` +
-                    `━━━━━━━━━━━━━━━━\n` +
-                    `📊 Statistics:\n` +
-                    `• Total Users: ${stats.users[0].count}\n` +
-                    `• Total Orders: ${stats.orders[0].count}\n` +
-                    `• Pending Orders: ${stats.pending[0].count}\n` +
-                    `• Total Revenue: ₹${stats.revenue[0].total}\n` +
-                    `• Available Stock: ${stats.stock[0].count}\n\n` +
-                    `Select an option:`;
-    
-    const keyboard = [
-        ['📂 Categories', '🎟 Vouchers'],
-        ['💰 Prices', '👥 Users'],
-        ['📦 Orders', '📢 Broadcast'],
-        ['🏷 Discounts', '📈 Detailed Stats'],
-        ['🔒 Security', '↩️ Back']
-    ];
-    
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            keyboard: keyboard,
-            resize_keyboard: true
-        }
+
+    await ctx.reply(message, {
+      parse_mode: 'Markdown',
+      reply_markup: keyboard
     });
+  });
+
+  // Register all admin callback handlers
+  bot.action(/admin_category.*/, async (ctx) => {
+    await category.handle(ctx);
+  });
+
+  bot.action(/admin_voucher.*/, async (ctx) => {
+    await voucher.handle(ctx);
+  });
+
+  bot.action(/admin_price.*/, async (ctx) => {
+    await price.handle(ctx);
+  });
+
+  bot.action(/admin_users.*/, async (ctx) => {
+    await userManage.handle(ctx);
+  });
+
+  bot.action(/admin_orders.*/, async (ctx) => {
+    await orderManage.handle(ctx);
+  });
+
+  bot.action(/admin_broadcast.*/, async (ctx) => {
+    await broadcast.handle(ctx);
+  });
+
+  bot.action(/admin_discount.*/, async (ctx) => {
+    await discount.handle(ctx);
+  });
+
+  bot.action(/admin_stats.*/, async (ctx) => {
+    await stats.show(ctx);
+  });
+
+  bot.action(/admin_security.*/, async (ctx) => {
+    await security.handle(ctx);
+  });
+
+  // Recovery actions
+  bot.action(/admin_recovery_accept_(.+)/, async (ctx) => {
+    const orderId = ctx.match[1];
+    await orderManage.processRecoveryAccept(ctx, orderId);
+  });
+
+  bot.action(/admin_recovery_reject_(.+)/, async (ctx) => {
+    const orderId = ctx.match[1];
+    await orderManage.processRecoveryReject(ctx, orderId);
+  });
+
+  // Ticket actions
+  bot.action(/admin_ticket_resolve_(.+)/, async (ctx) => {
+    const ticketId = ctx.match[1];
+    await userManage.resolveTicket(ctx, ticketId);
+  });
+
+  bot.action(/admin_ticket_block_(.+)/, async (ctx) => {
+    const userId = ctx.match[1];
+    await userManage.blockUserFromTicket(ctx, userId);
+  });
+
+  bot.action(/admin_ticket_reply_(.+)/, async (ctx) => {
+    const ticketId = ctx.match[1];
+    await userManage.replyToTicket(ctx, ticketId);
+  });
 }
 
-module.exports = {
-    showAdminPanel
-};
+module.exports = { register };
