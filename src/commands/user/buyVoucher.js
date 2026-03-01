@@ -1,316 +1,216 @@
-const db = require('../../database/database');
-const helpers = require('../../utils/helpers');
-const constants = require('../../utils/constants');
+const { Markup } = require('telegraf');
+const { deleteOldMessage } = require('../../utils/helpers');
 
-async function showCategories(bot, chatId, userId, edit = false) {
-    const categories = await db.getCategories(true);
-    
-    if (!categories.length) {
-        const msg = '❌ No categories available at the moment.';
-        if (edit) {
-            await bot.editMessageText(msg, {
-                chat_id: chatId,
-                message_id: global.lastMessages[userId]
-            });
-        } else {
-            const sent = await bot.sendMessage(chatId, msg);
-            global.lastMessages[userId] = sent.message_id;
-        }
-        return;
-    }
-    
-    const buttons = categories.map(c => [{
-        text: `${c.display_name || c.name} (Stock: ${c.stock || 0})`,
-        callback_data: `buy_cat_${c.id}`
-    }]);
-    
-    buttons.push([{ text: constants.BUTTONS.BACK, callback_data: 'back_main' }]);
-    
-    const message = '🛒 Select voucher category:';
-    
-    if (edit) {
-        await bot.editMessageText(message, {
-            chat_id: chatId,
-            message_id: global.lastMessages[userId],
-            reply_markup: { inline_keyboard: buttons }
-        });
-    } else {
-        const sent = await bot.sendMessage(chatId, message, {
-            reply_markup: { inline_keyboard: buttons }
-        });
-        global.lastMessages[userId] = sent.message_id;
-    }
-}
+async function showCategories(ctx) {
+  try {
+    // Get active categories with stock count
+    const categories = await global.pool.query(`
+      SELECT c.*, COUNT(v.id) as stock_count 
+      FROM categories c
+      LEFT JOIN vouchers v ON c.id = v.category_id AND v.status = 'available'
+      WHERE c.status = 'active'
+      GROUP BY c.id
+      ORDER BY c.value ASC
+    `);
 
-async function showQuantityOptions(bot, chatId, userId, categoryId, edit = false) {
-    const category = await db.getCategory(categoryId);
-    const availableStock = await db.getVoucherCount(categoryId, false);
-    
-    if (availableStock === 0) {
-        const msg = `❌ Sorry, ${category.display_name} is out of stock.`;
-        if (edit) {
-            await bot.editMessageText(msg, {
-                chat_id: chatId,
-                message_id: global.lastMessages[userId],
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '↩️ Back to Categories', callback_data: 'buy_back_categories' }]
-                    ]
-                }
-            });
-        } else {
-            const sent = await bot.sendMessage(chatId, msg, {
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '↩️ Back to Categories', callback_data: 'buy_back_categories' }]
-                    ]
-                }
-            });
-            global.lastMessages[userId] = sent.message_id;
-        }
-        return;
+    if (categories.rows.length === 0) {
+      return ctx.reply('📦 No categories available at the moment.');
     }
-    
-    // Get price for common quantities
-    const quantities = [1, 5, 10, 20, 50, 100].filter(q => q <= availableStock);
-    
-    const priceButtons = [];
-    for (const qty of quantities) {
-        const price = await db.getPriceTier(categoryId, qty) || helpers.calculateTotalPrice(category, qty, []);
-        priceButtons.push([{
-            text: `${qty} code${qty > 1 ? 's' : ''} - ₹${price}`,
-            callback_data: `buy_qty_${categoryId}_${qty}`
-        }]);
-    }
-    
-    // Custom quantity option
-    priceButtons.push([{
-        text: '✏️ Custom Quantity',
-        callback_data: `buy_custom_${categoryId}`
-    }]);
-    
-    priceButtons.push([
-        { text: '↩️ Back', callback_data: 'buy_back_categories' },
-        { text: '🏠 Home', callback_data: 'back_main' }
+
+    const buttons = categories.rows.map(cat => [
+      Markup.button.callback(
+        `${cat.name} (${cat.stock_count} left)`, 
+        `select_cat_${cat.id}`
+      )
     ]);
-    
-    const message = `${category.display_name}\n` +
-                    `━━━━━━━━━━━━━━━━\n` +
-                    `📦 Available Stock: ${availableStock} codes\n` +
-                    `💰 Select quantity:\n`;
-    
-    if (edit) {
-        await bot.editMessageText(message, {
-            chat_id: chatId,
-            message_id: global.lastMessages[userId],
-            reply_markup: { inline_keyboard: priceButtons }
-        });
-    } else {
-        const sent = await bot.sendMessage(chatId, message, {
-            reply_markup: { inline_keyboard: priceButtons }
-        });
-        global.lastMessages[userId] = sent.message_id;
-    }
-}
 
-async function showPayment(bot, chatId, userId, categoryId, quantity) {
-    const category = await db.getCategory(categoryId);
-    const price = await db.getPriceTier(categoryId, quantity) || 
-                  helpers.calculateTotalPrice(category, quantity, []);
-    
-    global.tempOrder = global.tempOrder || {};
-    global.tempOrder[userId] = {
-        categoryId,
-        quantity,
-        price,
-        step: 'payment'
-    };
-    
-    const message = `💳 Payment Details\n` +
-                    `━━━━━━━━━━━━━━━━\n` +
-                    `Category: ${category.display_name}\n` +
-                    `Quantity: ${quantity}\n` +
-                    `Total: ₹${price}\n\n` +
-                    `📱 Scan QR code to pay:\n` +
-                    `⬇️ After payment, tap "I have paid"`;
-    
-    const sent = await bot.sendPhoto(chatId, constants.PAYMENT_QR, {
-        caption: message,
-        reply_markup: {
-            inline_keyboard: [
-                [{ text: '💰 I have paid', callback_data: `payment_done_${userId}` }],
-                [{ text: '↩️ Back', callback_data: `buy_back_qty_${categoryId}` }]
-            ]
-        }
+    buttons.push([Markup.button.callback('🔙 Back', 'back_to_main')]);
+
+    await ctx.reply('🛒 *Select Voucher Category*\n\nChoose a category to continue:', {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: buttons
+      }
     });
-    
-    global.lastMessages[userId] = sent.message_id;
+
+  } catch (error) {
+    console.error('Show categories error:', error);
+    ctx.reply('An error occurred. Please try again.');
+  }
 }
 
-async function requestScreenshot(bot, chatId, userId) {
-    const msg = await bot.sendMessage(chatId, 
-        `📸 Please send your payment screenshot.\n\n` +
-        `⚠️ Fake screenshots will result in permanent ban.`,
-        {
-            reply_markup: {
-                force_reply: true,
-                selective: true
-            }
-        }
-    );
-    
-    global.waitingFor = global.waitingFor || {};
-    global.waitingFor[userId] = {
-        type: 'screenshot',
-        messageId: msg.message_id
-    };
-}
+async function selectCategory(ctx, categoryId) {
+  try {
+    // Get category details with stock
+    const category = await global.pool.query(`
+      SELECT c.*, COUNT(v.id) as stock_count 
+      FROM categories c
+      LEFT JOIN vouchers v ON c.id = v.category_id AND v.status = 'available'
+      WHERE c.id = $1
+      GROUP BY c.id
+    `, [categoryId]);
 
-async function requestUtr(bot, chatId, userId, screenshotId) {
-    global.tempOrder[userId].screenshotId = screenshotId;
-    global.tempOrder[userId].step = 'utr';
-    
-    const msg = await bot.sendMessage(chatId,
-        `📝 Please send your UTR/Transaction ID.\n\n` +
-        `⚠️ Fake UTR will result in permanent ban.`,
-        {
-            reply_markup: {
-                force_reply: true,
-                selective: true
-            }
-        }
-    );
-    
-    global.waitingFor[userId] = {
-        type: 'utr',
-        messageId: msg.message_id
-    };
-}
-
-async function submitOrder(bot, chatId, userId, utr) {
-    const orderData = global.tempOrder[userId];
-    
-    // Check if UTR already used
-    const utrExists = await db.checkUtrExists(utr);
-    if (utrExists) {
-        // Warning for fake UTR
-        await db.query(
-            'INSERT INTO user_warnings (user_id, reason, warning_type) VALUES (?, ?, ?)',
-            [userId, 'Duplicate/Fake UTR', 'fake_utr']
-        );
-        
-        // Check warning count
-        const warnings = await db.query(
-            'SELECT COUNT(*) as count FROM user_warnings WHERE user_id = ? AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)',
-            [userId]
-        );
-        
-        if (warnings[0].count >= 3) {
-            // Temporary block
-            await db.blockUser(userId, 'Multiple fake UTR attempts', 30);
-            await bot.sendMessage(chatId, '⛔️ You have been temporarily blocked for 30 minutes due to multiple fake UTR attempts.');
-            delete global.tempOrder[userId];
-            return;
-        }
-        
-        await bot.sendMessage(chatId, constants.ERRORS.UTR_EXISTS, {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '↩️ Try Again', callback_data: `buy_back_qty_${orderData.categoryId}` }]
-                ]
-            }
-        });
-        return;
+    if (category.rows.length === 0) {
+      return ctx.reply('Category not found.');
     }
+
+    const cat = category.rows[0];
     
-    // Generate order ID
-    const orderId = helpers.generateOrderId();
-    
-    // Create order in database
-    await db.createOrder({
-        order_id: orderId,
-        user_id: userId,
-        category_id: orderData.categoryId,
-        quantity: orderData.quantity,
-        total_price: orderData.price,
-        utr_number: utr,
-        screenshot_id: orderData.screenshotId
-    });
-    
-    // Log UTR for fraud detection
-    await db.query(
-        'INSERT INTO fraud_detection (utr_number, order_id, user_id, reason) VALUES (?, ?, ?, ?)',
-        [utr, orderId, userId, 'order_submitted']
-    );
-    
-    // Get user info for notification
-    const user = await db.getUser(userId);
-    const category = await db.getCategory(orderData.categoryId);
-    
-    // Send notification to admin
-    const notification = `🆕 New Order Received\n\n` +
-                        `Order ID: ${orderId}\n` +
-                        `User: ${user.first_name} (@${user.username || 'N/A'})\n` +
-                        `User ID: ${userId}\n` +
-                        `Category: ${category.display_name}\n` +
-                        `Quantity: ${orderData.quantity}\n` +
-                        `Total: ₹${orderData.price}\n` +
-                        `UTR: ${utr}`;
-    
-    await bot.sendMessage(process.env.ADMIN_ID, notification, {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: '✅ Accept', callback_data: `admin_accept_${orderId}` },
-                    { text: '❌ Reject', callback_data: `admin_reject_${orderId}` }
-                ]
-            ]
-        }
-    });
-    
-    // Send notification to channel
-    const channelMsg = helpers.format(constants.ORDER_NOTIFICATION,
-        user.first_name || 'N/A',
-        userId,
-        orderData.quantity,
-        `₹${orderData.price}`
-    );
-    
-    try {
-        await bot.sendMessage(process.env.CHANNEL_2_ID, channelMsg);
-    } catch (error) {
-        console.error('Channel notification error:', error);
+    // Store selected category in session
+    ctx.session = ctx.session || {};
+    ctx.session.selectedCategory = cat;
+
+    // Show quantity selection
+    await showQuantitySelection(ctx, cat);
+
+  } catch (error) {
+    console.error('Select category error:', error);
+    ctx.reply('An error occurred. Please try again.');
+  }
+}
+
+async function showQuantitySelection(ctx, category) {
+  const maxStock = category.stock_count;
+  
+  const buttons = [
+    [
+      Markup.button.callback('1', `qty_${category.id}_1`),
+      Markup.button.callback('2', `qty_${category.id}_2`),
+      Markup.button.callback('3', `qty_${category.id}_3`)
+    ],
+    [
+      Markup.button.callback('4', `qty_${category.id}_4`),
+      Markup.button.callback('5', `qty_${category.id}_5`),
+      Markup.button.callback('10', `qty_${category.id}_10`)
+    ],
+    [
+      Markup.button.callback('✏️ Custom', `custom_qty_${category.id}`)
+    ],
+    [Markup.button.callback('🔙 Back', 'buy_voucher')]
+  ];
+
+  await ctx.reply(
+    `🛒 *Buy ${category.name} Vouchers*\n\n` +
+    `📦 Available Stock: *${maxStock}*\n\n` +
+    `Select quantity:`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: buttons
+      }
     }
+  );
+}
+
+async function selectQuantity(ctx, categoryId, quantity) {
+  try {
+    // Check stock availability
+    const stockCheck = await global.pool.query(`
+      SELECT COUNT(*) as available 
+      FROM vouchers 
+      WHERE category_id = $1 AND status = 'available'
+    `, [categoryId]);
+
+    const available = parseInt(stockCheck.rows[0].available);
     
-    // Thank user
-    const thankMsg = await bot.sendMessage(chatId,
-        `✅ Order Submitted Successfully!\n\n` +
-        `Order ID: ${orderId}\n` +
-        `Date: ${helpers.formatDate(new Date())}\n` +
-        `Category: ${category.display_name}\n` +
-        `Quantity: ${orderData.quantity}\n` +
-        `Total: ₹${orderData.price}\n\n` +
-        `📌 Your order is being processed. You will receive vouchers shortly after admin approval.`,
-        {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '📦 Check Order Status', callback_data: 'my_orders' }],
-                    [{ text: '🏠 Main Menu', callback_data: 'back_main' }]
-                ]
-            }
-        }
-    );
-    
-    global.lastMessages[userId] = thankMsg.message_id;
-    delete global.tempOrder[userId];
-    delete global.waitingFor[userId];
+    if (available < quantity) {
+      return ctx.reply(`❌ Only ${available} vouchers available. Please select a lower quantity.`);
+    }
+
+    // Get price for this quantity
+    const price = await global.pool.query(`
+      SELECT price FROM price_tiers 
+      WHERE category_id = $1 AND quantity = $2
+    `, [categoryId, quantity]);
+
+    if (price.rows.length === 0) {
+      return ctx.reply('Price not configured for this quantity.');
+    }
+
+    const totalAmount = price.rows[0].price * quantity;
+
+    // Store order details in session
+    ctx.session = ctx.session || {};
+    ctx.session.pendingOrder = {
+      categoryId,
+      quantity,
+      totalAmount,
+      categoryName: ctx.session.selectedCategory.name
+    };
+
+    // Show payment page
+    await showPaymentPage(ctx);
+
+  } catch (error) {
+    console.error('Select quantity error:', error);
+    ctx.reply('An error occurred. Please try again.');
+  }
+}
+
+async function showPaymentPage(ctx) {
+  const order = ctx.session.pendingOrder;
+  
+  const message = 
+    "💳 *Payment Details*\n\n" +
+    `📦 Category: *${order.categoryName}*\n` +
+    `🔢 Quantity: *${order.quantity}*\n` +
+    `💰 Total Amount: *₹${order.totalAmount.toFixed(2)}*\n\n` +
+    "👇 *Scan QR Code to Pay*\n" +
+    "After payment, click the 'Paid' button and send the screenshot.";
+
+  const buttons = [
+    [Markup.button.callback('✅ I Have Paid', 'paid_confirm')],
+    [Markup.button.callback('🔙 Back', 'buy_voucher')]
+  ];
+
+  // Send QR code image
+  await ctx.replyWithPhoto(process.env.PAYMENT_QR, {
+    caption: message,
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  });
+}
+
+async function confirmPaid(ctx) {
+  await ctx.reply(
+    "📤 *Please send your payment screenshot*\n\n" +
+    "After sending the screenshot, you'll need to provide your UTR/Transaction ID.\n\n" +
+    "⚠️ *Warning:* Fake or illegal screenshots will result in permanent ban!",
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        force_reply: true
+      }
+    }
+  );
+  
+  // Set user state to expect screenshot
+  ctx.session = ctx.session || {};
+  ctx.session.awaitingScreenshot = true;
+}
+
+async function handleCustomQuantity(ctx, categoryId) {
+  await ctx.reply(
+    "✏️ *Enter custom quantity*\n\n" +
+    `Maximum available: ${ctx.session.selectedCategory.stock_count}`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        force_reply: true
+      }
+    }
+  );
+  
+  ctx.session = ctx.session || {};
+  ctx.session.awaitingCustomQuantity = categoryId;
 }
 
 module.exports = {
-    showCategories,
-    showQuantityOptions,
-    showPayment,
-    requestScreenshot,
-    requestUtr,
-    submitOrder
+  showCategories,
+  selectCategory,
+  selectQuantity,
+  handleCustomQuantity,
+  confirmPaid
 };
