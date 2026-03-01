@@ -27,6 +27,30 @@ function register(bot) {
     await disclaimer.show(ctx);
   });
   
+  // Category selection
+  bot.action(/select_cat_(.+)/, async (ctx) => {
+    const categoryId = ctx.match[1];
+    await buyVoucher.selectCategory(ctx, categoryId);
+  });
+  
+  // Quantity selection
+  bot.action(/qty_(.+)_(.+)/, async (ctx) => {
+    const categoryId = ctx.match[1];
+    const quantity = parseInt(ctx.match[2]);
+    await buyVoucher.selectQuantity(ctx, categoryId, quantity);
+  });
+  
+  // Custom quantity
+  bot.action(/custom_qty_(.+)/, async (ctx) => {
+    const categoryId = ctx.match[1];
+    await buyVoucher.handleCustomQuantity(ctx, categoryId);
+  });
+  
+  // Paid confirmation
+  bot.action('paid_confirm', async (ctx) => {
+    await buyVoucher.confirmPaid(ctx);
+  });
+  
   // Back button
   bot.action('back_to_main', async (ctx) => {
     const { showMainMenu } = require('../start');
@@ -41,5 +65,4 @@ function register(bot) {
   });
 }
 
-// Export the register function
 module.exports = { register };
