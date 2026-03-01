@@ -1,118 +1,80 @@
-const db = require('../../database/database');
-const helpers = require('../../utils/helpers');
+const { Markup } = require('telegraf');
+const moment = require('moment');
 
-async function showDetailedStats(bot, chatId) {
-    // Get overall stats
-    const totalUsers = await db.query('SELECT COUNT(*) as count FROM users');
-    const activeToday = await db.query(
-        'SELECT COUNT(*) as count FROM users WHERE DATE(last_active) = CURDATE()'
-    );
-    const newToday = await db.query(
-        'SELECT COUNT(*) as count FROM users WHERE DATE(joined_at) = CURDATE()'
-    );
+async function show(ctx) {
+  const stats = await global.pool.query(`
+    SELECT
+      -- User stats
+      (SELECT COUNT(*) FROM users) as total_users,
+      (SELECT COUNT(*) FROM users WHERE joined_at > NOW() - INTERVAL '24 hours') as users_24h,
+      (SELECT COUNT(*) FROM users WHERE joined_at > NOW() - INTERVAL '7 days') as users_7d,
+      
+      -- Order stats
+      (SELECT COUNT(*) FROM orders) as total_orders,
+      (SELECT COUNT(*) FROM orders WHERE status = 'completed') as completed_orders,
+      (SELECT COUNT(*) FROM orders WHERE status = 'pending') as pending_orders,
+      (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE status = 'completed') as total_revenue,
+      (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE created_at > NOW() - INTERVAL '24 hours') as revenue_24h,
+      (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE created_at > NOW() - INTERVAL '7 days') as revenue_7d,
+      
+      -- Voucher stats
+      (SELECT COUNT(*) FROM vouchers) as total_vouchers,
+      (SELECT COUNT(*) FROM vouchers WHERE status = 'available') as available_vouchers,
+      (SELECT COUNT(*) FROM vouchers WHERE status = 'sold') as sold_vouchers,
+      
+      -- Category stats
+      (SELECT COUNT(*) FROM categories WHERE status = 'active') as active_categories,
+      
+      -- Support stats
+      (SELECT COUNT(*) FROM support_tickets WHERE status = 'open') as open_tickets,
+      (SELECT COUNT(*) FROM support_tickets WHERE created_at > NOW() - INTERVAL '24 hours') as tickets_24h
+  `);
+
+  const s = stats.rows[0];
+
+  const message = 
+    "📈 *Bot Statistics*\n\n" +
+    "👥 *Users*\n" +
+    `├ Total: ${s.total_users}\n` +
+    `├ Last 24h: ${s.users_24h}\n` +
+    `└ Last 7d: ${s.users_7d}\n\n` +
     
-    const orders = await db.query('SELECT COUNT(*) as count FROM orders');
-    const pendingOrders = await db.query(
-        'SELECT COUNT(*) as count FROM orders WHERE status = "pending"'
-    );
-    const completedOrders = await db.query(
-        'SELECT COUNT(*) as count FROM orders WHERE status = "completed"'
-    );
+    "📦 *Orders*\n" +
+    `├ Total: ${s.total_orders}\n` +
+    `├ Completed: ${s.completed_orders}\n` +
+    `├ Pending: ${s.pending_orders}\n` +
+    `└ Success Rate: ${s.total_orders > 0 ? Math.round((s.completed_orders / s.total_orders) * 100) : 0}%\n\n` +
     
-    const revenue = await db.query(
-        'SELECT COALESCE(SUM(total_price), 0) as total FROM orders WHERE status = "completed"'
-    );
-    const todayRevenue = await db.query(
-        'SELECT COALESCE(SUM(total_price), 0) as total FROM orders WHERE DATE(completed_at) = CURDATE() AND status = "completed"'
-    );
+    "💰 *Revenue*\n" +
+    `├ Total: ₹${parseFloat(s.total_revenue).toFixed(2)}\n` +
+    `├ Last 24h: ₹${parseFloat(s.revenue_24h).toFixed(2)}\n` +
+    `└ Last 7d: ₹${parseFloat(s.revenue_7d).toFixed(2)}\n\n` +
     
-    const stock = await db.query('SELECT COUNT(*) as count FROM vouchers WHERE is_used = FALSE');
-    const usedStock = await db.query('SELECT COUNT(*) as count FROM vouchers WHERE is_used = TRUE');
+    "🎟 *Vouchers*\n" +
+    `├ Total: ${s.total_vouchers}\n` +
+    `├ Available: ${s.available_vouchers}\n` +
+    `├ Sold: ${s.sold_vouchers}\n` +
+    `└ Utilization: ${s.total_vouchers > 0 ? Math.round((s.sold_vouchers / s.total_vouchers) * 100) : 0}%\n\n` +
     
-    const blocked = await db.query('SELECT COUNT(*) as count FROM users WHERE is_blocked = TRUE');
-    
-    // Category breakdown
-    const categories = await db.getCategories(false);
-    let catStats = '';
-    for (const cat of categories) {
-        const catStock = await db.getVoucherCount(cat.id, false);
-        const catOrders = await db.query(
-            'SELECT COUNT(*) as count, COALESCE(SUM(total_price), 0) as rev FROM orders WHERE category_id = ? AND status = "completed"',
-            [cat.id]
-        );
-        catStats += `${cat.name}: Stock: ${catStock} | Orders: ${catOrders[0].count} | Rev: ₹${catOrders[0].rev}\n`;
+    "📊 *Other*\n" +
+    `├ Active Categories: ${s.active_categories}\n` +
+    `├ Open Tickets: ${s.open_tickets}\n` +
+    `└ Tickets (24h): ${s.tickets_24h}\n`;
+
+  const buttons = [
+    [
+      { text: '📊 Detailed Report', callback_data: 'admin_stats_detailed' },
+      { text: '📈 Export CSV', callback_data: 'admin_stats_export' }
+    ],
+    [{ text: '🔙 Back to Admin', callback_data: 'admin_back' }]
+  ];
+
+  await ctx.editMessageText(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
     }
-    
-    const message = `📊 Detailed Statistics\n` +
-                    `━━━━━━━━━━━━━━━━\n\n` +
-                    `👥 USERS\n` +
-                    `Total: ${totalUsers[0].count}\n` +
-                    `Active Today: ${activeToday[0].count}\n` +
-                    `New Today: ${newToday[0].count}\n` +
-                    `Blocked: ${blocked[0].count}\n\n` +
-                    
-                    `📦 ORDERS\n` +
-                    `Total: ${orders[0].count}\n` +
-                    `Pending: ${pendingOrders[0].count}\n` +
-                    `Completed: ${completedOrders[0].count}\n\n` +
-                    
-                    `💰 REVENUE\n` +
-                    `Total: ₹${revenue[0].total}\n` +
-                    `Today: ₹${todayRevenue[0].total}\n` +
-                    `Average: ₹${completedOrders[0].count ? (revenue[0].total / completedOrders[0].count).toFixed(2) : 0}\n\n` +
-                    
-                    `🎟 VOUCHERS\n` +
-                    `Available: ${stock[0].count}\n` +
-                    `Used: ${usedStock[0].count}\n` +
-                    `Total: ${stock[0].count + usedStock[0].count}\n\n` +
-                    
-                    `📊 CATEGORY BREAKDOWN\n` +
-                    `${catStats}\n` +
-                    
-                    `━━━━━━━━━━━━━━━━\n`;
-    
-    await bot.sendMessage(chatId, message);
+  });
 }
 
-async function showUserGrowth(bot, chatId) {
-    const daily = await db.query(
-        `SELECT DATE(joined_at) as date, COUNT(*) as count 
-         FROM users 
-         WHERE joined_at > DATE_SUB(NOW(), INTERVAL 7 DAY)
-         GROUP BY DATE(joined_at)
-         ORDER BY date DESC`
-    );
-    
-    let message = '📈 User Growth (Last 7 Days)\n━━━━━━━━━━━━━━━━\n\n';
-    
-    for (const day of daily) {
-        message += `${day.date}: +${day.count} users\n`;
-    }
-    
-    await bot.sendMessage(chatId, message);
-}
-
-async function showOrderStats(bot, chatId) {
-    const hourly = await db.query(
-        `SELECT HOUR(created_at) as hour, COUNT(*) as count 
-         FROM orders 
-         WHERE created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)
-         GROUP BY HOUR(created_at)
-         ORDER BY hour`
-    );
-    
-    let message = '📊 Order Activity (Last 24h)\n━━━━━━━━━━━━━━━━\n\n';
-    
-    for (const h of hourly) {
-        const hourStr = h.hour.toString().padStart(2, '0') + ':00';
-        message += `${hourStr}: ${h.count} orders\n`;
-    }
-    
-    await bot.sendMessage(chatId, message);
-}
-
-module.exports = {
-    showDetailedStats,
-    showUserGrowth,
-    showOrderStats
-};
+module.exports = { show };
