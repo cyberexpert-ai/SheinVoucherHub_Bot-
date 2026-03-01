@@ -1,159 +1,137 @@
-const db = require('../../database/database');
-const helpers = require('../../utils/helpers');
+const { Markup } = require('telegraf');
+const moment = require('moment');
+const { v4: uuidv4 } = require('uuid');
 
-async function discountMenu(bot, chatId, userId) {
-    const message = `🏷 Discount Management\n\n` +
-                    `Create and manage discount codes\n` +
-                    `━━━━━━━━━━━━━━━━\n\n` +
-                    `Select option:`;
-    
-    const keyboard = [
-        ['➕ Create Discount', '📋 List Discounts'],
-        ['✏️ Edit Discount', '❌ Delete Discount'],
-        ['↩️ Back to Admin']
-    ];
-    
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            keyboard: keyboard,
-            resize_keyboard: true
-        }
+async function handle(ctx) {
+  const action = ctx.callbackQuery.data;
+  
+  if (action === 'admin_discount') {
+    await showDiscountMenu(ctx);
+  } else if (action === 'admin_discount_add') {
+    await addDiscount(ctx);
+  } else if (action.startsWith('admin_discount_delete_')) {
+    const discountId = action.replace('admin_discount_delete_', '');
+    await deleteDiscount(ctx, discountId);
+  } else if (action.startsWith('admin_discount_edit_')) {
+    const discountId = action.replace('admin_discount_edit_', '');
+    await editDiscount(ctx, discountId);
+  }
+}
+
+async function showDiscountMenu(ctx) {
+  const discounts = await global.pool.query(`
+    SELECT d.*, c.name as category_name
+    FROM discounts d
+    LEFT JOIN categories c ON d.category_id = c.id
+    WHERE d.status = 'active'
+    ORDER BY d.created_at DESC
+  `);
+
+  let message = "🏷 *Discount Code Management*\n\n";
+
+  if (discounts.rows.length > 0) {
+    message += "*Active Discounts:*\n";
+    discounts.rows.forEach(d => {
+      const typeEmoji = d.type === 'percentage' ? '%' : '💰';
+      message += `${typeEmoji} *${d.code}*\n`;
+      message += `  Value: ${d.value}${d.type === 'percentage' ? '%' : ' fixed'}\n`;
+      message += `  Category: ${d.category_name || 'All'}\n`;
+      message += `  Used: ${d.used_count}/${d.usage_limit || '∞'}\n`;
+      message += `  Valid: ${moment(d.valid_from).format('DD/MM/YY')} - ${moment(d.valid_until).format('DD/MM/YY')}\n\n`;
     });
+  } else {
+    message += "No active discount codes.\n";
+  }
+
+  const buttons = [
+    [{ text: '➕ Add New Discount', callback_data: 'admin_discount_add' }],
+    [{ text: '📋 Expired Discounts', callback_data: 'admin_discount_expired' }],
+    [{ text: '🔙 Back to Admin', callback_data: 'admin_back' }]
+  ];
+
+  await ctx.editMessageText(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  });
 }
 
-async function createDiscount(bot, chatId, userId) {
-    const categories = await db.getCategories(true);
-    
-    let catList = '';
-    for (const cat of categories) {
-        catList += `• ${cat.id}: ${cat.name}\n`;
+async function addDiscount(ctx) {
+  await ctx.reply(
+    "➕ *Add New Discount Code*\n\n" +
+    "Enter discount details in format:\n\n" +
+    "`code|type|value|category_id|min_qty|max_qty|valid_days|usage_limit`\n\n" +
+    "Example:\n" +
+    "`SAVE20|percentage|20|1|1|10|30|100`\n\n" +
+    "Types: percentage, fixed\n" +
+    "Category ID: 0 for all categories",
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        force_reply: true
+      }
     }
-    
-    const msg = await bot.sendMessage(chatId,
-        `➕ Create Discount Code\n\n` +
-        `Send details in format:\n` +
-        `CODE|TYPE|VALUE|CATEGORY_ID|MIN_QTY|MAX_USES|EXPIRY_DAYS\n\n` +
-        `TYPE: percentage or fixed\n` +
-        `CATEGORY_ID: 0 for all categories\n` +
-        `EXPIRY_DAYS: number of days until expiry\n\n` +
-        `Available categories:\n${catList}\n` +
-        `Example: SAVE10|percentage|10|0|1|100|30`,
-        {
-            reply_markup: {
-                force_reply: true,
-                selective: true
-            }
-        }
-    );
-    
-    global.waitingFor = global.waitingFor || {};
-    global.waitingFor[userId] = {
-        type: 'admin_create_discount',
-        messageId: msg.message_id
-    };
+  );
+  
+  ctx.session = ctx.session || {};
+  ctx.session.adminAction = 'add_discount';
 }
 
-async function processCreateDiscount(bot, chatId, adminId, text) {
-    const parts = text.split('|').map(p => p.trim());
-    
-    if (parts.length < 7) {
-        await bot.sendMessage(chatId, '❌ Invalid format. Need 7 parts.');
-        return;
-    }
-    
-    const [code, type, value, catId, minQty, maxUses, expiryDays] = parts;
-    
-    if (type !== 'percentage' && type !== 'fixed') {
-        await bot.sendMessage(chatId, '❌ Type must be "percentage" or "fixed".');
-        return;
-    }
-    
-    if (isNaN(value) || isNaN(catId) || isNaN(minQty) || isNaN(maxUses) || isNaN(expiryDays)) {
-        await bot.sendMessage(chatId, '❌ All numeric fields must be numbers.');
-        return;
-    }
-    
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + parseInt(expiryDays));
-    
-    await db.query(
-        `INSERT INTO discount_codes 
-         (code, discount_type, discount_value, category_id, min_quantity, max_uses, expires_at, created_by) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [code.toUpperCase(), type, parseFloat(value), 
-         parseInt(catId) || null, parseInt(minQty), 
-         parseInt(maxUses), expiresAt, adminId]
-    );
-    
-    await bot.sendMessage(chatId, `✅ Discount code ${code.toUpperCase()} created!`);
+async function deleteDiscount(ctx, discountId) {
+  await global.pool.query(
+    'UPDATE discounts SET status = $1 WHERE id = $2',
+    ['deleted', discountId]
+  );
+
+  await ctx.answerCbQuery('✅ Discount deleted!');
+  await showDiscountMenu(ctx);
 }
 
-async function listDiscounts(bot, chatId) {
-    const discounts = await db.query(
-        `SELECT d.*, c.name as category_name 
-         FROM discount_codes d 
-         LEFT JOIN categories c ON d.category_id = c.id 
-         ORDER BY d.created_at DESC 
-         LIMIT 20`
-    );
-    
-    if (!discounts.length) {
-        await bot.sendMessage(chatId, 'No discount codes found.');
-        return;
+async function editDiscount(ctx, discountId) {
+  const discount = await global.pool.query(
+    'SELECT * FROM discounts WHERE id = $1',
+    [discountId]
+  );
+
+  if (discount.rows.length === 0) {
+    return ctx.reply('Discount not found.');
+  }
+
+  const d = discount.rows[0];
+
+  const message = 
+    `✏️ *Edit Discount: ${d.code}*\n\n` +
+    `Current Values:\n` +
+    `Type: ${d.type}\n` +
+    `Value: ${d.value}\n` +
+    `Category ID: ${d.category_id || 'All'}\n` +
+    `Min Quantity: ${d.min_quantity}\n` +
+    `Max Quantity: ${d.max_quantity || 'Unlimited'}\n` +
+    `Valid From: ${moment(d.valid_from).format('DD/MM/YYYY')}\n` +
+    `Valid Until: ${moment(d.valid_until).format('DD/MM/YYYY')}\n` +
+    `Usage Limit: ${d.usage_limit || 'Unlimited'}\n` +
+    `Used: ${d.used_count}\n\n` +
+    `What would you like to edit?`;
+
+  const buttons = [
+    [
+      { text: '💰 Value', callback_data: `admin_discount_edit_value_${d.id}` },
+      { text: '📅 Dates', callback_data: `admin_discount_edit_dates_${d.id}` }
+    ],
+    [
+      { text: '🔢 Limits', callback_data: `admin_discount_edit_limits_${d.id}` },
+      { text: '🔄 Status', callback_data: `admin_discount_edit_status_${d.id}` }
+    ],
+    [{ text: '🔙 Back', callback_data: 'admin_discount' }]
+  ];
+
+  await ctx.editMessageText(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
     }
-    
-    let message = '🏷 Active Discount Codes\n━━━━━━━━━━━━━━━━\n\n';
-    
-    for (const d of discounts) {
-        const status = d.is_active ? '✅ Active' : '❌ Inactive';
-        const category = d.category_name || 'All Categories';
-        const expiry = helpers.formatDate(d.expires_at);
-        
-        message += `Code: ${d.code}\n`;
-        message += `Type: ${d.discount_type} - ${d.discount_value}${d.discount_type === 'percentage' ? '%' : '₹'}\n`;
-        message += `Category: ${category}\n`;
-        message += `Min Qty: ${d.min_quantity}\n`;
-        message += `Uses: ${d.used_count}/${d.max_uses}\n`;
-        message += `Expires: ${expiry}\n`;
-        message += `Status: ${status}\n`;
-        message += `━━━━━━━━━━━━━━━━\n\n`;
-    }
-    
-    await bot.sendMessage(chatId, message);
+  });
 }
 
-async function deleteDiscount(bot, chatId, userId) {
-    const discounts = await db.query(
-        'SELECT id, code FROM discount_codes WHERE is_active = TRUE'
-    );
-    
-    if (!discounts.length) {
-        await bot.sendMessage(chatId, 'No active discount codes.');
-        return;
-    }
-    
-    let message = '❌ Delete Discount Code\n\nSelect code to delete:\n';
-    const buttons = [];
-    
-    for (const d of discounts) {
-        buttons.push([{
-            text: d.code,
-            callback_data: `admin_deldiscount_${d.id}`
-        }]);
-    }
-    buttons.push([{ text: '↩️ Cancel', callback_data: 'admin_back' }]);
-    
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: buttons
-        }
-    });
-}
-
-module.exports = {
-    discountMenu,
-    createDiscount,
-    processCreateDiscount,
-    listDiscounts,
-    deleteDiscount
-};
+module.exports = { handle };
