@@ -1,3 +1,4 @@
+// src/commands/start.js
 const { Markup } = require('telegraf');
 const { checkMembership } = require('../middlewares/channelCheck');
 const { deleteOldMessage, saveUser } = require('../utils/helpers');
@@ -9,10 +10,8 @@ async function startCommand(ctx) {
     const firstName = ctx.from.first_name;
     const lastName = ctx.from.last_name;
 
-    // Save or update user
     await saveUser(userId, username, firstName, lastName);
 
-    // Check channel membership
     const isMember = await checkMembership(ctx);
     
     if (!isMember) {
@@ -40,7 +39,6 @@ async function startCommand(ctx) {
       return;
     }
 
-    // User is a member, show main menu
     await showMainMenu(ctx);
     
   } catch (error) {
