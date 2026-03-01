@@ -1,95 +1,120 @@
-const db = require('../../database/database');
-const constants = require('../../utils/constants');
+const { Markup } = require('telegraf');
+const { v4: uuidv4 } = require('uuid');
 
-async function startSupport(bot, chatId, userId) {
-    const msg = await bot.sendMessage(chatId,
-        `🆘 Support\n\n` +
-        `Please describe your issue. Our team will respond shortly.\n\n` +
-        `⚠️ Fake, abusive, or spam messages will result in restriction/block.`,
-        {
-            reply_markup: {
-                force_reply: true,
-                selective: true
-            }
-        }
-    );
-    
-    global.waitingFor = global.waitingFor || {};
-    global.waitingFor[userId] = {
-        type: 'support_message',
-        messageId: msg.message_id
-    };
+async function start(ctx) {
+  const message = 
+    "🆘 *Support Center*\n\n" +
+    "How can we help you today?\n\n" +
+    "• Voucher issues\n" +
+    "• Payment problems\n" +
+    "• Recovery assistance\n" +
+    "• General inquiries\n\n" +
+    "Please describe your issue in detail.";
+
+  const buttons = [
+    [Markup.button.callback('↩️ Leave', 'leave_support')]
+  ];
+
+  await ctx.reply(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons,
+      force_reply: true
+    }
+  });
+
+  // Set user state to expect support message
+  ctx.session = ctx.session || {};
+  ctx.session.awaitingSupport = true;
 }
 
-async function forwardToAdmin(bot, chatId, userId, message, messageId) {
-    const user = await db.getUser(userId);
+async function handleSupportMessage(ctx, messageText, photo) {
+  try {
+    const userId = ctx.from.id;
+    const username = ctx.from.username || 'No username';
+    const firstName = ctx.from.first_name;
     
-    const supportMsg = `🆘 New Support Message\n\n` +
-                      `From: ${user.first_name} (@${user.username || 'N/A'})\n` +
-                      `User ID: ${userId}\n` +
-                      `Message: ${message}\n\n` +
-                      `Reply to this message to respond to user.`;
-    
-    const adminMsg = await bot.sendMessage(process.env.ADMIN_ID, supportMsg, {
+    // Generate ticket ID
+    const ticketId = `TKT-${uuidv4().slice(0, 8).toUpperCase()}`;
+
+    // Save ticket to database
+    const ticket = await global.pool.query(
+      `INSERT INTO support_tickets (ticket_id, user_id, message, photo, status)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [ticketId, userId, messageText, photo || null, 'open']
+    );
+
+    // Forward to admin
+    const adminMessage = 
+      "🎫 *New Support Ticket*\n\n" +
+      `🆔 *Ticket ID:* \`${ticketId}\`\n` +
+      `👤 *User:* ${firstName} (@${username})\n` +
+      `🆔 *User ID:* \`${userId}\`\n` +
+      `📝 *Message:*\n${messageText}\n\n` +
+      `📅 *Time:* ${new Date().toLocaleString()}`;
+
+    const adminId = process.env.ADMIN_ID;
+
+    if (photo) {
+      await ctx.telegram.sendPhoto(adminId, photo, {
+        caption: adminMessage,
+        parse_mode: 'Markdown',
         reply_markup: {
-            force_reply: true,
-            selective: true
+          inline_keyboard: [
+            [
+              Markup.button.callback(`✅ Mark Resolved`, `admin_ticket_resolve_${ticketId}`),
+              Markup.button.callback(`⛔ Block User`, `admin_ticket_block_${userId}`)
+            ],
+            [
+              Markup.button.callback(`💬 Reply`, `admin_ticket_reply_${ticketId}`)
+            ]
+          ]
         }
-    });
-    
-    // Store mapping for reply handling
-    global.supportConversations = global.supportConversations || {};
-    global.supportConversations[adminMsg.message_id] = {
-        userId: userId,
-        userMsgId: messageId,
-        chatId: chatId
-    };
-    
-    await bot.sendMessage(chatId,
-        `✅ Your message has been sent to support team.\n` +
-        `We'll get back to you soon.`,
-        {
-            reply_markup: {
-                keyboard: [[constants.BUTTONS.LEAVE]],
-                resize_keyboard: true
-            }
+      });
+    } else {
+      await ctx.telegram.sendMessage(adminId, adminMessage, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              Markup.button.callback(`✅ Mark Resolved`, `admin_ticket_resolve_${ticketId}`),
+              Markup.button.callback(`⛔ Block User`, `admin_ticket_block_${userId}`)
+            ],
+            [
+              Markup.button.callback(`💬 Reply`, `admin_ticket_reply_${ticketId}`)
+            ]
+          ]
         }
+      });
+    }
+
+    // Confirm to user
+    await ctx.reply(
+      "✅ *Support Request Sent*\n\n" +
+      `Your ticket ID: \`${ticketId}\`\n\n` +
+      "Our support team will respond shortly. Please be patient.\n\n" +
+      "⚠️ *Warning:* Fake or timepass messages may result in account restrictions.",
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [Markup.button.callback('🔙 Back', 'back_to_main')]
+          ]
+        }
+      }
     );
+
+    // Log support activity
+    await global.pool.query(
+      `INSERT INTO activity_logs (user_id, action, details) 
+       VALUES ($1, $2, $3)`,
+      [userId, 'support_ticket_created', { ticket_id: ticketId }]
+    );
+
+  } catch (error) {
+    console.error('Support message error:', error);
+    ctx.reply('An error occurred. Please try again later.');
+  }
 }
 
-async function handleAdminReply(bot, adminId, replyToMessageId, replyText) {
-    const conversation = global.supportConversations?.[replyToMessageId];
-    
-    if (!conversation) {
-        await bot.sendMessage(adminId, '❌ Conversation not found.');
-        return;
-    }
-    
-    const { userId, chatId } = conversation;
-    
-    // Check if user is blocked
-    const user = await db.getUser(userId);
-    if (user && user.is_blocked) {
-        await bot.sendMessage(adminId, '❌ This user is blocked. Unblock them first to reply.');
-        return;
-    }
-    
-    await bot.sendMessage(chatId,
-        `🆘 Support Response:\n\n${replyText}`,
-        {
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '📝 Reply', callback_data: 'support' }]
-                ]
-            }
-        }
-    );
-    
-    await bot.sendMessage(adminId, '✅ Reply sent to user.');
-}
-
-module.exports = {
-    startSupport,
-    forwardToAdmin,
-    handleAdminReply
-};
+module.exports = { start, handleSupportMessage };
