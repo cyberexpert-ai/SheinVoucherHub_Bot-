@@ -1,28 +1,24 @@
 {
   "name": "sheinvoucherhub-bot",
   "version": "1.0.0",
-  "description": "Advanced Shein Voucher Telegram Bot",
+  "description": "Advanced Telegram Bot for Shein Vouchers",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.64.0",
+    "telegraf": "^4.15.3",
     "express": "^4.18.2",
-    "mysql2": "^3.9.1",
+    "pg": "^8.11.3",
     "dotenv": "^16.3.1",
-    "axios": "^1.6.7",
-    "moment": "^2.30.1",
-    "uuid": "^9.0.1",
-    "cron": "^3.1.6",
-    "rate-limiter-flexible": "^2.4.1",
+    "node-cron": "^3.0.3",
     "winston": "^3.11.0",
-    "express-rate-limit": "^7.1.5",
-    "helmet": "^7.1.0",
-    "compression": "^1.7.4"
+    "axios": "^1.6.2",
+    "moment": "^2.29.4",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
-    "nodemon": "^3.0.3"
+    "nodemon": "^3.0.2"
   }
 }
