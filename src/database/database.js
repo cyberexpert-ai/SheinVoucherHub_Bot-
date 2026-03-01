@@ -1,307 +1,248 @@
-const mysql = require('mysql2/promise');
-require('dotenv').config();
+const { Pool } = require('pg');
 
-class Database {
-    constructor() {
-        this.pool = mysql.createPool({
-            host: process.env.DB_HOST,
-            user: process.env.DB_USER,
-            password: process.env.DB_PASSWORD,
-            database: process.env.DB_NAME,
-            port: process.env.DB_PORT || 3306,
-            waitForConnections: true,
-            connectionLimit: 10,
-            queueLimit: 0,
-            enableKeepAlive: true,
-            keepAliveInitialDelay: 0
-        });
-    }
+const pool = new Pool({
+  connectionString: process.env.DB_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
 
-    async query(sql, params) {
-        try {
-            const [results] = await this.pool.execute(sql, params);
-            return results;
-        } catch (error) {
-            console.error('Database query error:', error);
-            throw error;
-        }
-    }
+async function initDatabase() {
+  const client = await pool.connect();
+  try {
+    // Create tables
+    await client.query(`
+      -- Users table
+      CREATE TABLE IF NOT EXISTS users (
+        user_id BIGINT PRIMARY KEY,
+        username VARCHAR(255),
+        first_name VARCHAR(255),
+        last_name VARCHAR(255),
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        status VARCHAR(50) DEFAULT 'active',
+        block_reason TEXT,
+        block_expiry TIMESTAMP,
+        total_orders INTEGER DEFAULT 0,
+        total_spent DECIMAL(10,2) DEFAULT 0,
+        verified BOOLEAN DEFAULT FALSE,
+        language VARCHAR(10) DEFAULT 'en'
+      );
 
-    async transaction(callback) {
-        const connection = await this.pool.getConnection();
-        await connection.beginTransaction();
-        
-        try {
-            const result = await callback(connection);
-            await connection.commit();
-            return result;
-        } catch (error) {
-            await connection.rollback();
-            throw error;
-        } finally {
-            connection.release();
-        }
-    }
+      -- Categories table
+      CREATE TABLE IF NOT EXISTS categories (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255) NOT NULL,
+        value DECIMAL(10,2) NOT NULL,
+        description TEXT,
+        status VARCHAR(50) DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    // User methods
-    async getUser(telegramId) {
-        const users = await this.query(
-            'SELECT * FROM users WHERE telegram_id = ?',
-            [telegramId]
-        );
-        return users[0];
-    }
+      -- Price tiers table
+      CREATE TABLE IF NOT EXISTS price_tiers (
+        id SERIAL PRIMARY KEY,
+        category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
+        quantity INTEGER NOT NULL,
+        price DECIMAL(10,2) NOT NULL,
+        UNIQUE(category_id, quantity)
+      );
 
-    async createOrUpdateUser(userData) {
-        const { telegram_id, username, first_name, last_name } = userData;
-        
-        await this.query(
-            `INSERT INTO users (telegram_id, username, first_name, last_name, last_active) 
-             VALUES (?, ?, ?, ?, NOW())
-             ON DUPLICATE KEY UPDATE 
-             username = VALUES(username),
-             first_name = VALUES(first_name),
-             last_name = VALUES(last_name),
-             last_active = NOW()`,
-            [telegram_id, username, first_name, last_name]
-        );
-        
-        return this.getUser(telegram_id);
-    }
+      -- Vouchers table
+      CREATE TABLE IF NOT EXISTS vouchers (
+        id SERIAL PRIMARY KEY,
+        code TEXT NOT NULL,
+        category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
+        status VARCHAR(50) DEFAULT 'available',
+        order_id VARCHAR(50),
+        purchased_by BIGINT REFERENCES users(user_id),
+        purchased_at TIMESTAMP,
+        expires_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(code)
+      );
 
-    async blockUser(telegramId, reason, expiresIn = null) {
-        let expiresAt = null;
-        if (expiresIn) {
-            expiresAt = new Date(Date.now() + expiresIn * 60000);
-        }
-        
-        await this.query(
-            'UPDATE users SET is_blocked = TRUE, block_reason = ?, block_expires = ? WHERE telegram_id = ?',
-            [reason, expiresAt, telegramId]
-        );
-    }
+      -- Orders table
+      CREATE TABLE IF NOT EXISTS orders (
+        id SERIAL PRIMARY KEY,
+        order_id VARCHAR(50) UNIQUE NOT NULL,
+        user_id BIGINT REFERENCES users(user_id),
+        category_id INTEGER REFERENCES categories(id),
+        quantity INTEGER NOT NULL,
+        total_amount DECIMAL(10,2) NOT NULL,
+        utr_number VARCHAR(255),
+        screenshot_file_id VARCHAR(255),
+        status VARCHAR(50) DEFAULT 'pending',
+        admin_notes TEXT,
+        recovery_expiry TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    async unblockUser(telegramId) {
-        await this.query(
-            'UPDATE users SET is_blocked = FALSE, block_reason = NULL, block_expires = NULL WHERE telegram_id = ?',
-            [telegramId]
-        );
-    }
+      -- Order vouchers mapping
+      CREATE TABLE IF NOT EXISTS order_vouchers (
+        order_id VARCHAR(50) REFERENCES orders(order_id) ON DELETE CASCADE,
+        voucher_id INTEGER REFERENCES vouchers(id) ON DELETE CASCADE,
+        PRIMARY KEY (order_id, voucher_id)
+      );
 
-    // Category methods
-    async getCategories(activeOnly = true) {
-        let sql = 'SELECT * FROM categories';
-        if (activeOnly) {
-            sql += ' WHERE is_active = TRUE';
-        }
-        sql += ' ORDER BY sort_order ASC, id ASC';
-        
-        return this.query(sql);
-    }
+      -- Discounts table
+      CREATE TABLE IF NOT EXISTS discounts (
+        id SERIAL PRIMARY KEY,
+        code VARCHAR(50) UNIQUE NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        value DECIMAL(10,2),
+        category_id INTEGER REFERENCES categories(id),
+        min_quantity INTEGER DEFAULT 1,
+        max_quantity INTEGER,
+        valid_from TIMESTAMP,
+        valid_until TIMESTAMP,
+        usage_limit INTEGER,
+        used_count INTEGER DEFAULT 0,
+        status VARCHAR(50) DEFAULT 'active',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    async getCategory(categoryId) {
-        const categories = await this.query(
-            'SELECT * FROM categories WHERE id = ?',
-            [categoryId]
-        );
-        return categories[0];
-    }
+      -- Broadcast messages table
+      CREATE TABLE IF NOT EXISTS broadcasts (
+        id SERIAL PRIMARY KEY,
+        message TEXT NOT NULL,
+        photo VARCHAR(255),
+        buttons JSONB,
+        target_type VARCHAR(50),
+        target_value TEXT,
+        status VARCHAR(50) DEFAULT 'pending',
+        sent_count INTEGER DEFAULT 0,
+        total_count INTEGER,
+        created_by BIGINT REFERENCES users(user_id),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        scheduled_for TIMESTAMP
+      );
 
-    async addCategory(name, value, displayName) {
-        const result = await this.query(
-            'INSERT INTO categories (name, value, display_name) VALUES (?, ?, ?)',
-            [name, value, displayName]
-        );
-        return result.insertId;
-    }
+      -- Support tickets table
+      CREATE TABLE IF NOT EXISTS support_tickets (
+        id SERIAL PRIMARY KEY,
+        ticket_id VARCHAR(50) UNIQUE NOT NULL,
+        user_id BIGINT REFERENCES users(user_id),
+        message TEXT,
+        photo VARCHAR(255),
+        status VARCHAR(50) DEFAULT 'open',
+        admin_response TEXT,
+        resolved_by BIGINT REFERENCES users(user_id),
+        resolved_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    async updateCategory(categoryId, data) {
-        const updates = [];
-        const values = [];
-        
-        for (const [key, value] of Object.entries(data)) {
-            if (value !== undefined) {
-                updates.push(`${key} = ?`);
-                values.push(value);
-            }
-        }
-        
-        if (updates.length === 0) return;
-        
-        values.push(categoryId);
-        await this.query(
-            `UPDATE categories SET ${updates.join(', ')} WHERE id = ?`,
-            values
-        );
-    }
+      -- Blocked UTRs table (anti-fraud)
+      CREATE TABLE IF NOT EXISTS blocked_utrs (
+        id SERIAL PRIMARY KEY,
+        utr_number VARCHAR(255) UNIQUE NOT NULL,
+        reason TEXT,
+        blocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        blocked_by BIGINT REFERENCES users(user_id)
+      );
 
-    async deleteCategory(categoryId) {
-        await this.query('DELETE FROM categories WHERE id = ?', [categoryId]);
-    }
+      -- Used Order IDs table
+      CREATE TABLE IF NOT EXISTS used_order_ids (
+        order_id VARCHAR(50) PRIMARY KEY,
+        user_id BIGINT REFERENCES users(user_id),
+        used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    // Voucher methods
-    async getVoucherCount(categoryId, used = false) {
-        const results = await this.query(
-            'SELECT COUNT(*) as count FROM vouchers WHERE category_id = ? AND is_used = ?',
-            [categoryId, used]
-        );
-        return results[0].count;
-    }
+      -- Activity logs table
+      CREATE TABLE IF NOT EXISTS activity_logs (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT REFERENCES users(user_id),
+        action VARCHAR(255),
+        details JSONB,
+        ip_address VARCHAR(45),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    async addVoucher(categoryId, code, addedBy) {
-        await this.query(
-            'INSERT INTO vouchers (category_id, code, added_by) VALUES (?, ?, ?)',
-            [categoryId, code, addedBy]
-        );
-    }
+      -- Create indexes for better performance
+      CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+      CREATE INDEX IF NOT EXISTS idx_vouchers_status ON vouchers(status);
+      CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+      CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+      CREATE INDEX IF NOT EXISTS idx_orders_utr ON orders(utr_number);
+      CREATE INDEX IF NOT EXISTS idx_support_user_id ON support_tickets(user_id);
+      CREATE INDEX IF NOT EXISTS idx_activity_user_id ON activity_logs(user_id);
+      CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_logs(created_at);
 
-    async addBulkVouchers(categoryId, codes, addedBy) {
-        if (!codes.length) return;
-        
-        const values = codes.map(code => [categoryId, code, addedBy]);
-        const placeholders = values.map(() => '(?, ?, ?)').join(',');
-        const flattened = values.flat();
-        
-        await this.query(
-            `INSERT INTO vouchers (category_id, code, added_by) VALUES ${placeholders}`,
-            flattened
-        );
-    }
+      -- Insert default categories with price tiers
+      INSERT INTO categories (name, value, description) VALUES
+        ('₹500', 500, '500 Rupee Voucher Category'),
+        ('₹1000', 1000, '1000 Rupee Voucher Category'),
+        ('₹2000', 2000, '2000 Rupee Voucher Category'),
+        ('₹4000', 4000, '4000 Rupee Voucher Category')
+      ON CONFLICT (id) DO NOTHING;
 
-    async getAvailableVouchers(categoryId, limit) {
-        return this.query(
-            'SELECT id, code FROM vouchers WHERE category_id = ? AND is_used = FALSE ORDER BY id ASC LIMIT ?',
-            [categoryId, limit]
-        );
-    }
+      -- Insert price tiers for each category
+      -- This will be handled by a separate function to insert all 100 quantities
+      DO $$
+      DECLARE
+        cat_record RECORD;
+        qty INTEGER;
+      BEGIN
+        FOR cat_record IN SELECT id, value FROM categories LOOP
+          FOR qty IN 1..100 LOOP
+            INSERT INTO price_tiers (category_id, quantity, price)
+            VALUES (
+              cat_record.id, 
+              qty,
+              CASE 
+                WHEN cat_record.value = 500 THEN 
+                  CASE 
+                    WHEN qty <= 5 THEN qty * 49
+                    WHEN qty <= 10 THEN qty * 49.8
+                    WHEN qty <= 20 THEN qty * 49.5
+                    WHEN qty <= 30 THEN qty * 49.3
+                    WHEN qty <= 50 THEN qty * 49.2
+                    ELSE qty * 49
+                  END
+                WHEN cat_record.value = 1000 THEN 
+                  CASE 
+                    WHEN qty <= 5 THEN qty * 99
+                    WHEN qty <= 10 THEN qty * 99.8
+                    WHEN qty <= 20 THEN qty * 99.5
+                    WHEN qty <= 30 THEN qty * 99.3
+                    WHEN qty <= 50 THEN qty * 99.2
+                    ELSE qty * 99
+                  END
+                WHEN cat_record.value = 2000 THEN 
+                  CASE 
+                    WHEN qty <= 5 THEN qty * 199
+                    WHEN qty <= 10 THEN qty * 199.8
+                    WHEN qty <= 20 THEN qty * 199.5
+                    WHEN qty <= 30 THEN qty * 199.3
+                    WHEN qty <= 50 THEN qty * 199.2
+                    ELSE qty * 199
+                  END
+                WHEN cat_record.value = 4000 THEN 
+                  CASE 
+                    WHEN qty <= 5 THEN qty * 299
+                    WHEN qty <= 10 THEN qty * 299.8
+                    WHEN qty <= 20 THEN qty * 299.5
+                    WHEN qty <= 30 THEN qty * 299.3
+                    WHEN qty <= 50 THEN qty * 299.2
+                    ELSE qty * 299
+                  END
+              END
+            )
+            ON CONFLICT (category_id, quantity) DO NOTHING;
+          END LOOP;
+        END LOOP;
+      END $$;
+    `);
 
-    async markVoucherAsUsed(voucherId, userId, orderId) {
-        await this.query(
-            'UPDATE vouchers SET is_used = TRUE, used_by = ?, order_id = ?, used_at = NOW() WHERE id = ?',
-            [userId, orderId, voucherId]
-        );
-    }
-
-    // Price tier methods
-    async getPriceTier(categoryId, quantity) {
-        const prices = await this.query(
-            'SELECT price FROM price_tiers WHERE category_id = ? AND quantity = ?',
-            [categoryId, quantity]
-        );
-        return prices[0]?.price;
-    }
-
-    async updatePriceTier(categoryId, quantity, price) {
-        await this.query(
-            `INSERT INTO price_tiers (category_id, quantity, price) 
-             VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE price = VALUES(price)`,
-            [categoryId, quantity, price]
-        );
-    }
-
-    // Order methods
-    async createOrder(orderData) {
-        const { order_id, user_id, category_id, quantity, total_price, utr_number, screenshot_id } = orderData;
-        
-        await this.query(
-            `INSERT INTO orders (order_id, user_id, category_id, quantity, total_price, utr_number, screenshot_id, status, recovery_expires)
-             VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', DATE_ADD(NOW(), INTERVAL 2 HOUR))`,
-            [order_id, user_id, category_id, quantity, total_price, utr_number, screenshot_id]
-        );
-        
-        return order_id;
-    }
-
-    async getOrder(orderId) {
-        const orders = await this.query(
-            `SELECT o.*, c.name as category_name, c.value as category_value, u.username, u.first_name
-             FROM orders o
-             LEFT JOIN categories c ON o.category_id = c.id
-             LEFT JOIN users u ON o.user_id = u.telegram_id
-             WHERE o.order_id = ?`,
-            [orderId]
-        );
-        return orders[0];
-    }
-
-    async getUserOrders(userId, limit = 10) {
-        return this.query(
-            `SELECT o.*, c.name as category_name, c.value as category_value,
-                    GROUP_CONCAT(ov.voucher_code) as vouchers
-             FROM orders o
-             LEFT JOIN categories c ON o.category_id = c.id
-             LEFT JOIN order_vouchers ov ON o.order_id = ov.order_id
-             WHERE o.user_id = ?
-             GROUP BY o.id
-             ORDER BY o.created_at DESC
-             LIMIT ?`,
-            [userId, limit]
-        );
-    }
-
-    async updateOrderStatus(orderId, status, note = null) {
-        let sql = 'UPDATE orders SET status = ?, updated_at = NOW()';
-        const params = [status];
-        
-        if (status === 'completed') {
-            sql += ', completed_at = NOW()';
-        }
-        
-        if (note) {
-            sql += ', admin_note = ?';
-            params.push(note);
-        }
-        
-        sql += ' WHERE order_id = ?';
-        params.push(orderId);
-        
-        await this.query(sql, params);
-    }
-
-    async assignVouchersToOrder(orderId, vouchers) {
-        const values = vouchers.map(v => [orderId, v.id, v.code]);
-        const placeholders = values.map(() => '(?, ?, ?)').join(',');
-        const flattened = values.flat();
-        
-        await this.query(
-            `INSERT INTO order_vouchers (order_id, voucher_id, voucher_code) VALUES ${placeholders}`,
-            flattened
-        );
-    }
-
-    async checkUtrExists(utr) {
-        const results = await this.query(
-            'SELECT id FROM orders WHERE utr_number = ? UNION SELECT id FROM fraud_detection WHERE utr_number = ?',
-            [utr, utr]
-        );
-        return results.length > 0;
-    }
-
-    // Stats methods
-    async updateDailyStats() {
-        const today = new Date().toISOString().split('T')[0];
-        
-        await this.query(
-            `INSERT INTO stats (date, total_users, new_users, total_orders, completed_orders, total_revenue, blocked_users)
-             SELECT 
-                 ?,
-                 (SELECT COUNT(*) FROM users),
-                 (SELECT COUNT(*) FROM users WHERE DATE(joined_at) = ?),
-                 (SELECT COUNT(*) FROM orders WHERE DATE(created_at) = ?),
-                 (SELECT COUNT(*) FROM orders WHERE DATE(completed_at) = ? AND status = 'completed'),
-                 (SELECT COALESCE(SUM(total_price), 0) FROM orders WHERE DATE(completed_at) = ? AND status = 'completed'),
-                 (SELECT COUNT(*) FROM users WHERE is_blocked = TRUE)
-             ON DUPLICATE KEY UPDATE
-                 total_users = VALUES(total_users),
-                 new_users = VALUES(new_users),
-                 total_orders = VALUES(total_orders),
-                 completed_orders = VALUES(completed_orders),
-                 total_revenue = VALUES(total_revenue),
-                 blocked_users = VALUES(blocked_users)`,
-            [today, today, today, today, today]
-        );
-    }
+    console.log('Database initialized successfully');
+  } catch (error) {
+    console.error('Error initializing database:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
-module.exports = new Database();
+module.exports = { pool, initDatabase };
