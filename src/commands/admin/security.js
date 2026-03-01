@@ -1,129 +1,205 @@
-const db = require('../../database/database');
+const { Markup } = require('telegraf');
 
-async function securityMenu(bot, chatId, userId) {
-    const fraudCases = await db.query(
-        'SELECT COUNT(*) as count FROM fraud_detection WHERE detected_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)'
-    );
-    
-    const warnings = await db.query(
-        'SELECT COUNT(*) as count FROM user_warnings WHERE created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)'
-    );
-    
-    const message = `🔒 Security Center\n` +
-                    `━━━━━━━━━━━━━━━━\n\n` +
-                    `Fraud Cases (24h): ${fraudCases[0].count}\n` +
-                    `Warnings (24h): ${warnings[0].count}\n\n` +
-                    `Select option:`;
-    
-    const keyboard = [
-        ['🚫 Fraud Detection', '⚠️ User Warnings'],
-        ['🔍 Audit Log', '⚙️ Security Settings'],
-        ['↩️ Back to Admin']
-    ];
-    
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            keyboard: keyboard,
-            resize_keyboard: true
-        }
-    });
+async function handle(ctx) {
+  const action = ctx.callbackQuery.data;
+  
+  if (action === 'admin_security') {
+    await showSecurityMenu(ctx);
+  } else if (action === 'admin_security_utr') {
+    await showBlockedUTRs(ctx);
+  } else if (action === 'admin_security_orderids') {
+    await showUsedOrderIDs(ctx);
+  } else if (action === 'admin_security_logs') {
+    await showActivityLogs(ctx);
+  } else if (action === 'admin_security_fraud') {
+    await showFraudDetection(ctx);
+  }
 }
 
-async function fraudDetection(bot, chatId) {
-    const fraud = await db.query(
-        `SELECT f.*, u.username, u.first_name 
-         FROM fraud_detection f 
-         LEFT JOIN users u ON f.user_id = u.telegram_id 
-         ORDER BY f.detected_at DESC 
-         LIMIT 20`
-    );
-    
-    if (!fraud.length) {
-        await bot.sendMessage(chatId, 'No fraud cases found.');
-        return;
+async function showSecurityMenu(ctx) {
+  const stats = await global.pool.query(`
+    SELECT
+      (SELECT COUNT(*) FROM blocked_utrs) as blocked_utrs,
+      (SELECT COUNT(*) FROM used_order_ids) as used_order_ids,
+      (SELECT COUNT(*) FROM activity_logs WHERE created_at > NOW() - INTERVAL '24 hours') as recent_activities,
+      (SELECT COUNT(*) FROM users WHERE status != 'active') as blocked_users
+  `);
+
+  const message = 
+    "🔒 *Security Center*\n\n" +
+    `📊 *Statistics*\n` +
+    `├ Blocked UTRs: ${stats.rows[0].blocked_utrs}\n` +
+    `├ Used Order IDs: ${stats.rows[0].used_order_ids}\n` +
+    `├ Recent Activities: ${stats.rows[0].recent_activities}\n` +
+    `└ Blocked Users: ${stats.rows[0].blocked_users}\n`;
+
+  const buttons = [
+    [
+      { text: '🚫 Blocked UTRs', callback_data: 'admin_security_utr' },
+      { text: '🆔 Used Order IDs', callback_data: 'admin_security_orderids' }
+    ],
+    [
+      { text: '📋 Activity Logs', callback_data: 'admin_security_logs' },
+      { text: '🕵️ Fraud Detection', callback_data: 'admin_security_fraud' }
+    ],
+    [
+      { text: '⚙️ Security Settings', callback_data: 'admin_security_settings' }
+    ],
+    [{ text: '🔙 Back to Admin', callback_data: 'admin_back' }]
+  ];
+
+  await ctx.editMessageText(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
     }
-    
-    let message = '🚫 Fraud Detection Log\n━━━━━━━━━━━━━━━━\n\n';
-    
-    for (const f of fraud) {
-        message += `User: ${f.first_name} (@${f.username || 'N/A'})\n`;
-        message += `ID: ${f.user_id}\n`;
-        message += `UTR: ${f.utr_number}\n`;
-        message += `Order: ${f.order_id || 'N/A'}\n`;
-        message += `Reason: ${f.reason}\n`;
-        message += `Time: ${f.detected_at}\n`;
-        message += `━━━━━━━━━━━━━━━━\n\n`;
-    }
-    
-    await bot.sendMessage(chatId, message);
+  });
 }
 
-async function userWarnings(bot, chatId) {
-    const warnings = await db.query(
-        `SELECT w.*, u.username, u.first_name 
-         FROM user_warnings w 
-         LEFT JOIN users u ON w.user_id = u.telegram_id 
-         ORDER BY w.created_at DESC 
-         LIMIT 20`
-    );
-    
-    if (!warnings.length) {
-        await bot.sendMessage(chatId, 'No warnings found.');
-        return;
+async function showBlockedUTRs(ctx) {
+  const utrs = await global.pool.query(`
+    SELECT * FROM blocked_utrs 
+    ORDER BY blocked_at DESC 
+    LIMIT 20
+  `);
+
+  if (utrs.rows.length === 0) {
+    return ctx.reply('No blocked UTRs found.');
+  }
+
+  let message = "🚫 *Blocked UTR Numbers*\n\n";
+  
+  utrs.rows.forEach((utr, i) => {
+    message += `${i+1}. \`${utr.utr_number}\`\n`;
+    message += `   Reason: ${utr.reason || 'N/A'}\n`;
+    message += `   Blocked: ${new Date(utr.blocked_at).toLocaleString()}\n\n`;
+  });
+
+  const buttons = [
+    [{ text: '🔙 Back', callback_data: 'admin_security' }]
+  ];
+
+  await ctx.reply(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
     }
-    
-    let message = '⚠️ User Warnings\n━━━━━━━━━━━━━━━━\n\n';
-    
-    for (const w of warnings) {
-        message += `User: ${w.first_name} (@${w.username || 'N/A'})\n`;
-        message += `ID: ${w.user_id}\n`;
-        message += `Type: ${w.warning_type}\n`;
-        message += `Reason: ${w.reason}\n`;
-        message += `Time: ${w.created_at}\n`;
-        if (w.expires_at) {
-            message += `Expires: ${w.expires_at}\n`;
-        }
-        message += `━━━━━━━━━━━━━━━━\n\n`;
-    }
-    
-    await bot.sendMessage(chatId, message);
+  });
 }
 
-async function securitySettings(bot, chatId) {
-    const settings = {
-        max_warnings: 3,
-        fraud_cooldown: 24,
-        recovery_hours: 2,
-        temp_block_minutes: 30
-    };
-    
-    const message = `⚙️ Security Settings\n` +
-                    `━━━━━━━━━━━━━━━━\n\n` +
-                    `Max Warnings: ${settings.max_warnings}\n` +
-                    `Fraud Cooldown: ${settings.fraud_cooldown}h\n` +
-                    `Recovery Window: ${settings.recovery_hours}h\n` +
-                    `Temp Block: ${settings.temp_block_minutes}m\n\n` +
-                    `To change settings, send:\n` +
-                    `setting=value\n` +
-                    `Example: max_warnings=5`;
-    
-    const msg = await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            force_reply: true,
-            selective: true
-        }
-    });
-    
-    global.waitingFor = global.waitingFor || {};
-    global.waitingFor[chatId] = {
-        type: 'admin_security_settings',
-        messageId: msg.message_id
-    };
+async function showUsedOrderIDs(ctx) {
+  const orderIds = await global.pool.query(`
+    SELECT * FROM used_order_ids 
+    ORDER BY used_at DESC 
+    LIMIT 20
+  `);
+
+  if (orderIds.rows.length === 0) {
+    return ctx.reply('No used Order IDs found.');
+  }
+
+  let message = "🆔 *Used Order IDs*\n\n";
+  
+  orderIds.rows.forEach((order, i) => {
+    message += `${i+1}. \`${order.order_id}\`\n`;
+    message += `   User ID: \`${order.user_id}\`\n`;
+    message += `   Used: ${new Date(order.used_at).toLocaleString()}\n\n`;
+  });
+
+  const buttons = [
+    [{ text: '🔙 Back', callback_data: 'admin_security' }]
+  ];
+
+  await ctx.reply(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  });
 }
 
-module.exports = {
-    securityMenu,
-    fraudDetection,
-    userWarnings,
-    securitySettings
-};
+async function showActivityLogs(ctx) {
+  const logs = await global.pool.query(`
+    SELECT al.*, u.username, u.first_name
+    FROM activity_logs al
+    LEFT JOIN users u ON al.user_id = u.user_id
+    ORDER BY al.created_at DESC
+    LIMIT 20
+  `);
+
+  if (logs.rows.length === 0) {
+    return ctx.reply('No activity logs found.');
+  }
+
+  let message = "📋 *Recent Activity Logs*\n\n";
+  
+  logs.rows.forEach((log, i) => {
+    message += `${i+1}. ${log.first_name} (@${log.username || 'N/A'})\n`;
+    message += `   Action: ${log.action}\n`;
+    message += `   Time: ${new Date(log.created_at).toLocaleString()}\n`;
+    if (log.details) {
+      message += `   Details: \`${JSON.stringify(log.details)}\`\n`;
+    }
+    message += '\n';
+  });
+
+  const buttons = [
+    [{ text: '🔙 Back', callback_data: 'admin_security' }]
+  ];
+
+  await ctx.reply(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  });
+}
+
+async function showFraudDetection(ctx) {
+  // Detect suspicious patterns
+  const suspicious = await global.pool.query(`
+    SELECT 
+      u.user_id,
+      u.first_name,
+      u.username,
+      COUNT(DISTINCT o.utr_number) as unique_utrs,
+      COUNT(o.id) as total_orders,
+      SUM(o.total_amount) as total_spent,
+      COUNT(DISTINCT date(o.created_at)) as active_days
+    FROM users u
+    LEFT JOIN orders o ON u.user_id = o.user_id
+    WHERE o.status = 'pending' OR o.status = 'rejected'
+    GROUP BY u.user_id
+    HAVING COUNT(o.id) > 5 OR COUNT(DISTINCT o.utr_number) > 3
+    ORDER BY total_orders DESC
+    LIMIT 10
+  `);
+
+  if (suspicious.rows.length === 0) {
+    return ctx.reply('No suspicious activity detected.');
+  }
+
+  let message = "🕵️ *Fraud Detection*\n\n";
+  message += "*Suspicious Users:*\n\n";
+
+  suspicious.rows.forEach((user, i) => {
+    message += `${i+1}. ${user.first_name} (@${user.username || 'N/A'})\n`;
+    message += `   User ID: \`${user.user_id}\`\n`;
+    message += `   Orders: ${user.total_orders}\n`;
+    message += `   Unique UTRs: ${user.unique_utrs}\n`;
+    message += `   Total Spent: ₹${parseFloat(user.total_spent || 0).toFixed(2)}\n\n`;
+  });
+
+  const buttons = [
+    [{ text: '🔙 Back', callback_data: 'admin_security' }]
+  ];
+
+  await ctx.reply(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  });
+}
+
+module.exports = { handle };
