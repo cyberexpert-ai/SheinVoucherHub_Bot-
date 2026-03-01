@@ -1,20 +1,25 @@
 services:
-  - type: web
+  - type: worker
     name: sheinvoucherhub-bot
     env: node
     buildCommand: npm install
     startCommand: npm start
     envVars:
-      - key: NODE_ENV
-        value: production
       - key: BOT_TOKEN
         sync: false
-      - key: DB_HOST
-        sync: false
-      - key: DB_USER
-        sync: false
-      - key: DB_PASSWORD
-        sync: false
-      - key: DB_NAME
-        sync: false
-    autoDeploy: true
+      - key: ADMIN_ID
+        value: 8004114088
+      - key: CHANNEL_1
+        value: @SheinVoucherHub
+      - key: CHANNEL_2
+        value: @OrdersNotify
+      - key: CHANNEL_2_ID
+        value: -1002862139182
+      - key: PAYMENT_QR
+        value: https://i.supaimg.com/00332ad4-8aa7-408f-8705-55dbc91ea737.jpg
+      - key: SUPPORT_BOT
+        value: @SheinSupportRobot
+      - key: DB_URL
+        value: postgresql://sheinvoucherhub_user:yxZCminzLKFcf5ZO12ePkti1Urcp6bJG@dpg-d6hc8r1drdic73cjrkhg-a.oregon-postgres.render.com/sheinvoucherhub
+      - key: PORT
+        value: 3000
