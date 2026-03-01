@@ -1,160 +1,156 @@
-const db = require('../../database/database');
-const helpers = require('../../utils/helpers');
+const { Markup } = require('telegraf');
 
-async function manageVouchers(bot, chatId, userId) {
-    const categories = await db.getCategories(true);
-    
-    let message = '🎟 Voucher Management\n━━━━━━━━━━━━━━━━\n\n';
-    
-    for (const cat of categories) {
-        const total = await db.getVoucherCount(cat.id, false) + await db.getVoucherCount(cat.id, true);
-        const available = await db.getVoucherCount(cat.id, false);
-        message += `${cat.name}: ${available}/${total} available\n`;
+async function handle(ctx) {
+  const action = ctx.callbackQuery.data;
+  
+  if (action === 'admin_voucher') {
+    await showVoucherMenu(ctx);
+  } else if (action.startsWith('admin_voucher_add_')) {
+    const categoryId = action.replace('admin_voucher_add_', '');
+    await addVoucher(ctx, categoryId);
+  } else if (action.startsWith('admin_voucher_bulk_')) {
+    const categoryId = action.replace('admin_voucher_bulk_', '');
+    await bulkAddVouchers(ctx, categoryId);
+  } else if (action.startsWith('admin_voucher_delete_')) {
+    const voucherId = action.replace('admin_voucher_delete_', '');
+    await deleteVoucher(ctx, voucherId);
+  } else if (action.startsWith('admin_voucher_category_')) {
+    const categoryId = action.replace('admin_voucher_category_', '');
+    await showCategoryVouchers(ctx, categoryId);
+  }
+}
+
+async function showVoucherMenu(ctx) {
+  const categories = await global.pool.query(`
+    SELECT c.*, COUNT(v.id) as voucher_count
+    FROM categories c
+    LEFT JOIN vouchers v ON c.id = v.category_id
+    GROUP BY c.id
+    ORDER BY c.value ASC
+  `);
+
+  let message = "🎟 *Voucher Management*\n\nSelect a category:\n\n";
+  const buttons = [];
+
+  for (const cat of categories.rows) {
+    message += `• ${cat.name} - ${cat.voucher_count} vouchers\n`;
+    buttons.push([
+      { text: `📦 ${cat.name}`, callback_data: `admin_voucher_category_${cat.id}` }
+    ]);
+  }
+
+  buttons.push([{ text: '🔙 Back to Admin', callback_data: 'admin_back' }]);
+
+  await ctx.editMessageText(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
     }
-    
-    const keyboard = [
-        ['➕ Add Single', '📦 Add Bulk'],
-        ['📋 View Codes', '❌ Delete Codes'],
-        ['↩️ Back to Admin']
-    ];
-    
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            keyboard: keyboard,
-            resize_keyboard: true
-        }
+  });
+}
+
+async function showCategoryVouchers(ctx, categoryId) {
+  const category = await global.pool.query(
+    'SELECT * FROM categories WHERE id = $1',
+    [categoryId]
+  );
+
+  if (category.rows.length === 0) {
+    return ctx.reply('Category not found.');
+  }
+
+  const cat = category.rows[0];
+
+  const vouchers = await global.pool.query(`
+    SELECT v.*, u.username as purchased_by_username
+    FROM vouchers v
+    LEFT JOIN users u ON v.purchased_by = u.user_id
+    WHERE v.category_id = $1
+    ORDER BY v.status, v.created_at DESC
+    LIMIT 20
+  `, [categoryId]);
+
+  let message = `🎟 *Vouchers - ${cat.name}*\n\n`;
+  message += `Total: ${vouchers.rowCount} vouchers\n\n`;
+
+  const available = vouchers.rows.filter(v => v.status === 'available').length;
+  const sold = vouchers.rows.filter(v => v.status === 'sold').length;
+  
+  message += `📦 Available: ${available}\n`;
+  message += `✅ Sold: ${sold}\n\n`;
+
+  if (vouchers.rows.length > 0) {
+    message += "*Recent Vouchers:*\n";
+    vouchers.rows.slice(0, 5).forEach((v, i) => {
+      const statusEmoji = v.status === 'available' ? '🟢' : '🔴';
+      message += `${statusEmoji} \`${v.code}\` - ${v.status}\n`;
     });
+  }
+
+  const buttons = [
+    [
+      { text: '➕ Add Single', callback_data: `admin_voucher_add_${categoryId}` },
+      { text: '📚 Bulk Add', callback_data: `admin_voucher_bulk_${categoryId}` }
+    ],
+    [
+      { text: '🗑 Delete All Available', callback_data: `admin_voucher_clear_${categoryId}` }
+    ],
+    [{ text: '🔙 Back', callback_data: 'admin_voucher' }]
+  ];
+
+  await ctx.editMessageText(message, {
+    parse_mode: 'Markdown',
+    reply_markup: {
+      inline_keyboard: buttons
+    }
+  });
 }
 
-async function addSingleVoucher(bot, chatId, userId) {
-    const categories = await db.getCategories(true);
-    
-    let message = '➕ Add Single Voucher\n\nSelect category:\n';
-    const buttons = [];
-    
-    for (const cat of categories) {
-        buttons.push([{
-            text: cat.name,
-            callback_data: `admin_addsingle_${cat.id}`
-        }]);
+async function addVoucher(ctx, categoryId) {
+  await ctx.reply(
+    "➕ *Add Single Voucher*\n\n" +
+    "Send the voucher code:",
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        force_reply: true
+      }
     }
-    buttons.push([{ text: '↩️ Cancel', callback_data: 'admin_back' }]);
-    
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: buttons
-        }
-    });
+  );
+  
+  ctx.session = ctx.session || {};
+  ctx.session.adminAction = 'add_voucher';
+  ctx.session.categoryId = categoryId;
 }
 
-async function addBulkVouchers(bot, chatId, userId) {
-    const categories = await db.getCategories(true);
-    
-    let message = '📦 Add Bulk Vouchers\n\nSelect category:\n';
-    const buttons = [];
-    
-    for (const cat of categories) {
-        buttons.push([{
-            text: cat.name,
-            callback_data: `admin_addbulk_${cat.id}`
-        }]);
+async function bulkAddVouchers(ctx, categoryId) {
+  await ctx.reply(
+    "📚 *Bulk Add Vouchers*\n\n" +
+    "Send voucher codes (one per line):\n\n" +
+    "Example:\n" +
+    "CODE123\n" +
+    "CODE456\n" +
+    "CODE789",
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        force_reply: true
+      }
     }
-    buttons.push([{ text: '↩️ Cancel', callback_data: 'admin_back' }]);
-    
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: buttons
-        }
-    });
+  );
+  
+  ctx.session = ctx.session || {};
+  ctx.session.adminAction = 'bulk_add_vouchers';
+  ctx.session.categoryId = categoryId;
 }
 
-async function processBulkVouchers(bot, chatId, userId, categoryId, text) {
-    // Split by new line or comma
-    const codes = text.split('\n').flatMap(line => line.split(',')).map(c => c.trim()).filter(c => c.length > 0);
-    
-    if (codes.length === 0) {
-        await bot.sendMessage(chatId, '❌ No valid codes found.');
-        return;
-    }
-    
-    if (codes.length > 1000) {
-        await bot.sendMessage(chatId, '❌ Maximum 1000 codes at once.');
-        return;
-    }
-    
-    await db.addBulkVouchers(categoryId, codes, userId);
-    
-    await bot.sendMessage(chatId, `✅ Added ${codes.length} vouchers successfully.`);
+async function deleteVoucher(ctx, voucherId) {
+  await global.pool.query(
+    'DELETE FROM vouchers WHERE id = $1 AND status = $2',
+    [voucherId, 'available']
+  );
+  
+  await ctx.answerCbQuery('✅ Voucher deleted successfully!');
 }
 
-async function viewVouchers(bot, chatId, userId) {
-    const categories = await db.getCategories(true);
-    
-    let message = '📋 View Vouchers\n\nSelect category:\n';
-    const buttons = [];
-    
-    for (const cat of categories) {
-        const available = await db.getVoucherCount(cat.id, false);
-        buttons.push([{
-            text: `${cat.name} (${available} available)`,
-            callback_data: `admin_viewcodes_${cat.id}`
-        }]);
-    }
-    buttons.push([{ text: '↩️ Cancel', callback_data: 'admin_back' }]);
-    
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: buttons
-        }
-    });
-}
-
-async function showVoucherList(bot, chatId, userId, categoryId, page = 0) {
-    const pageSize = 20;
-    const offset = page * pageSize;
-    
-    const vouchers = await db.query(
-        'SELECT code, is_used, used_by, used_at FROM vouchers WHERE category_id = ? ORDER BY id DESC LIMIT ? OFFSET ?',
-        [categoryId, pageSize, offset]
-    );
-    
-    const category = await db.getCategory(categoryId);
-    const total = await db.getVoucherCount(categoryId, false) + await db.getVoucherCount(categoryId, true);
-    
-    let message = `📋 ${category.name} Vouchers\n`;
-    message += `Total: ${total}\n`;
-    message += `━━━━━━━━━━━━━━━━\n\n`;
-    
-    for (const v of vouchers) {
-        const status = v.is_used ? '❌ Used' : '✅ Available';
-        message += `${v.code} - ${status}\n`;
-        if (v.is_used) {
-            message += `  Used by: ${v.used_by}\n`;
-        }
-        message += '\n';
-    }
-    
-    const buttons = [];
-    if (page > 0) {
-        buttons.push([{ text: '◀️ Previous', callback_data: `admin_viewcodes_${categoryId}_${page-1}` }]);
-    }
-    if (vouchers.length === pageSize) {
-        buttons.push([{ text: 'Next ▶️', callback_data: `admin_viewcodes_${categoryId}_${page+1}` }]);
-    }
-    buttons.push([{ text: '↩️ Back', callback_data: 'admin_back_vouchers' }]);
-    
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: buttons
-        }
-    });
-}
-
-module.exports = {
-    manageVouchers,
-    addSingleVoucher,
-    addBulkVouchers,
-    processBulkVouchers,
-    viewVouchers,
-    showVoucherList
-};
+module.exports = { handle };
