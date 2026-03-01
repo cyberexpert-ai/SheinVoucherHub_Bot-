@@ -1,62 +1,44 @@
 # Shein Voucher Hub Bot
 
-Advanced Telegram bot for purchasing and managing Shein vouchers.
+Advanced Telegram Bot for Shein Voucher Sales
 
 ## Features
 
-### User Features
-- 🛒 Buy vouchers with multiple quantity options
-- 🔁 Recover purchased vouchers
-- 📦 View order history
-- 🆘 Support system
-- 📜 Disclaimer information
-
-### Admin Features
-- 📊 Dashboard with statistics
-- 📂 Category management
-- 🎟 Voucher management (add single/bulk)
-- 💰 Price management
-- 👥 User management (block/unblock)
-- 📦 Order management
-- 📢 Broadcast messages
-- 🏷 Discount codes
-- 🔒 Security & fraud detection
+- ✅ Mandatory Channel Join
+- ✅ Category-based Voucher System
+- ✅ Dynamic Pricing Tiers
+- ✅ Payment with Screenshot & UTR
+- ✅ Admin Panel with Full Control
+- ✅ Order Management
+- ✅ Recovery System
+- ✅ User Management (Block/Unblock)
+- ✅ Broadcast Messages
+- ✅ Discount Codes
+- ✅ Statistics & Analytics
+- ✅ Fraud Detection
+- ✅ Support Ticket System
+- ✅ Activity Logging
 
 ## Deployment on Render
 
 1. Fork this repository
 2. Create a new Web Service on Render
 3. Connect your repository
-4. Set environment variables:
-   - `BOT_TOKEN`: Your Telegram bot token
-   - `ADMIN_ID`: Admin Telegram ID
-   - `DB_HOST`: Database host
-   - `DB_USER`: Database user
-   - `DB_PASSWORD`: Database password
-   - `DB_NAME`: Database name
+4. Add environment variables from `.env`
 5. Deploy!
 
-## Database Setup
+## Environment Variables
 
-Run the `src/database/init.sql` script to create all required tables.
+See `.env` file for required variables.
 
-## Commands
+## Admin Commands
 
-### User Commands
-- `/start` - Start the bot
+- `/admin` - Open admin panel
 
-### Admin Panel Access
-- Send any message to admin after starting the bot
+## Database
 
-## Security Features
+PostgreSQL on Render is used for all data storage.
 
-- Force channel join
-- UTR duplicate detection
-- Warning system
-- Temporary blocks
-- Fraud logging
-- Rate limiting
+## License
 
-## Support
-
-For issues or questions, contact @SheinSupportRobot
+Private - All rights reserved
