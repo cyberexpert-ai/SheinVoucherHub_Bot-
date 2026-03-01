@@ -1,3 +1,4 @@
+// src/commands/admin/index.js
 const category = require('./category');
 const voucher = require('./voucher');
 const price = require('./price');
@@ -8,6 +9,7 @@ const discount = require('./discount');
 const stats = require('./stats');
 const security = require('./security');
 
+// This function registers all admin command handlers
 function register(bot) {
   // Admin menu
   bot.command('admin', async (ctx) => {
@@ -103,6 +105,14 @@ function register(bot) {
     const ticketId = ctx.match[1];
     await userManage.replyToTicket(ctx, ticketId);
   });
+  
+  // Admin back button
+  bot.action('admin_back', async (ctx) => {
+    // Show admin menu again
+    ctx.callbackQuery.data = 'admin';
+    await ctx.telegram.callbackQueryHandler(ctx);
+  });
 }
 
+// Make sure to export the register function
 module.exports = { register };
