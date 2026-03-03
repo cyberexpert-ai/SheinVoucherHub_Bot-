@@ -130,8 +130,8 @@ const handleVerifyJoin = async (bot, user, message) => {
             );
             
             // Save session
-            const pool = getPool();
-            await pool.query(
+            const pool2 = getPool();
+            await pool2.query(
                 `INSERT INTO user_sessions (user_id, last_message_id, updated_at)
                  VALUES ($1, $2, NOW())
                  ON CONFLICT (user_id) DO UPDATE 
