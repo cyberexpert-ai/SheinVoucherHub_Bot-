@@ -1,44 +1,32 @@
 # Shein Voucher Hub Bot
 
-Advanced Telegram Bot for Shein Voucher Sales
+A powerful Telegram bot for selling Shein vouchers with complete admin panel.
 
 ## Features
 
-- ✅ Mandatory Channel Join
-- ✅ Category-based Voucher System
-- ✅ Dynamic Pricing Tiers
-- ✅ Payment with Screenshot & UTR
-- ✅ Admin Panel with Full Control
-- ✅ Order Management
-- ✅ Recovery System
-- ✅ User Management (Block/Unblock)
-- ✅ Broadcast Messages
-- ✅ Discount Codes
-- ✅ Statistics & Analytics
-- ✅ Fraud Detection
-- ✅ Support Ticket System
-- ✅ Activity Logging
+### User Features
+- Force join channels
+- Buy vouchers by category
+- Multiple quantity selection
+- Payment via UPI/QR
+- Order tracking
+- Voucher recovery system
+- Support system
+- Order history
 
-## Deployment on Render
+### Admin Features
+- Category management (add/edit/delete)
+- Voucher management (single/bulk add)
+- Price management
+- User management (block/unblock/temp restrict)
+- Order management
+- Broadcast messaging
+- Discount codes
+- Statistics dashboard
+- Security features (UTR blocking, fraud detection)
 
-1. Fork this repository
-2. Create a new Web Service on Render
-3. Connect your repository
-4. Add environment variables from `.env`
-5. Deploy!
+## Setup
 
-## Environment Variables
-
-See `.env` file for required variables.
-
-## Admin Commands
-
-- `/admin` - Open admin panel
-
-## Database
-
-PostgreSQL on Render is used for all data storage.
-
-## License
-
-Private - All rights reserved
+1. Install dependencies:
+```bash
+npm install
