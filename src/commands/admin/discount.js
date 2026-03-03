@@ -1,137 +1,112 @@
-const { Markup } = require('telegraf');
-const moment = require('moment');
-const { v4: uuidv4 } = require('uuid');
+const { getPool } = require('../../database/database');
+const logger = require('../../utils/logger');
+const { formatCurrency } = require('../../utils/helpers');
 
-async function handle(ctx) {
-  const action = ctx.callbackQuery.data;
-  
-  if (action === 'admin_discount') {
-    await showDiscountMenu(ctx);
-  } else if (action === 'admin_discount_add') {
-    await addDiscount(ctx);
-  } else if (action.startsWith('admin_discount_delete_')) {
-    const discountId = action.replace('admin_discount_delete_', '');
-    await deleteDiscount(ctx, discountId);
-  } else if (action.startsWith('admin_discount_edit_')) {
-    const discountId = action.replace('admin_discount_edit_', '');
-    await editDiscount(ctx, discountId);
-  }
-}
-
-async function showDiscountMenu(ctx) {
-  const discounts = await global.pool.query(`
-    SELECT d.*, c.name as category_name
-    FROM discounts d
-    LEFT JOIN categories c ON d.category_id = c.id
-    WHERE d.status = 'active'
-    ORDER BY d.created_at DESC
-  `);
-
-  let message = "🏷 *Discount Code Management*\n\n";
-
-  if (discounts.rows.length > 0) {
-    message += "*Active Discounts:*\n";
-    discounts.rows.forEach(d => {
-      const typeEmoji = d.type === 'percentage' ? '%' : '💰';
-      message += `${typeEmoji} *${d.code}*\n`;
-      message += `  Value: ${d.value}${d.type === 'percentage' ? '%' : ' fixed'}\n`;
-      message += `  Category: ${d.category_name || 'All'}\n`;
-      message += `  Used: ${d.used_count}/${d.usage_limit || '∞'}\n`;
-      message += `  Valid: ${moment(d.valid_from).format('DD/MM/YY')} - ${moment(d.valid_until).format('DD/MM/YY')}\n\n`;
+const showDiscountMenu = async (bot, chatId) => {
+    const pool = getPool();
+    
+    const discounts = await pool.query(`
+        SELECT * FROM discount_codes 
+        WHERE is_active = true 
+        ORDER BY created_at DESC 
+        LIMIT 10
+    `);
+    
+    let message = '🏷 Discount Code Management\n\n';
+    message += 'Active Discount Codes:\n\n';
+    
+    if (discounts.rows.length === 0) {
+        message += 'No active discount codes.\n';
+    } else {
+        discounts.rows.forEach(d => {
+            message += `Code: ${d.code}\n`;
+            message += `Type: ${d.discount_type} - ${d.discount_value}${d.discount_type === 'percentage' ? '%' : '₹'}\n`;
+            message += `Min Purchase: ${formatCurrency(d.min_purchase)}\n`;
+            message += `Used: ${d.used_count}/${d.usage_limit || '∞'}\n`;
+            message += `Valid: ${new Date(d.valid_from).toLocaleDateString()} - ${d.valid_until ? new Date(d.valid_until).toLocaleDateString() : 'Never'}\n`;
+            message += '━━━━━━━━━━━━━━━━━━\n';
+        });
+    }
+    
+    const buttons = [
+        [
+            { text: '➕ Create Discount', callback_data: 'admin_discount_create' },
+            { text: '✏️ Edit Discount', callback_data: 'admin_discount_edit' }
+        ],
+        [
+            { text: '🗑 Delete Discount', callback_data: 'admin_discount_delete' },
+            { text: '📊 Usage Stats', callback_data: 'admin_discount_stats' }
+        ],
+        [{ text: '↩️ Back', callback_data: 'admin_back' }]
+    ];
+    
+    await bot.sendMessage(chatId, message, {
+        reply_markup: { inline_keyboard: buttons }
     });
-  } else {
-    message += "No active discount codes.\n";
-  }
+};
 
-  const buttons = [
-    [{ text: '➕ Add New Discount', callback_data: 'admin_discount_add' }],
-    [{ text: '📋 Expired Discounts', callback_data: 'admin_discount_expired' }],
-    [{ text: '🔙 Back to Admin', callback_data: 'admin_back' }]
-  ];
+const createDiscount = async (bot, chatId, userId) => {
+    const pool = getPool();
+    
+    await pool.query(
+        `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE 
+         SET temp_data = $2, updated_at = NOW()`,
+        [userId, { action: 'admin_discount_code' }]
+    );
+    
+    await bot.sendMessage(
+        chatId,
+        'Enter discount code:',
+        {
+            reply_markup: { force_reply: true }
+        }
+    );
+};
 
-  await ctx.editMessageText(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons
+const processDiscountCode = async (bot, chatId, userId, text, session) => {
+    const pool = getPool();
+    
+    // Check if code exists
+    const existing = await pool.query(
+        'SELECT * FROM discount_codes WHERE code = $1',
+        [text.toUpperCase()]
+    );
+    
+    if (existing.rows.length > 0) {
+        await bot.sendMessage(chatId, '❌ This discount code already exists!');
+        return;
     }
-  });
-}
+    
+    await pool.query(
+        `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE 
+         SET temp_data = $2, updated_at = NOW()`,
+        [userId, { action: 'admin_discount_type', code: text.toUpperCase() }]
+    );
+    
+    const buttons = {
+        inline_keyboard: [
+            [
+                { text: 'Percentage (%)', callback_data: 'admin_discount_type_percentage' },
+                { text: 'Fixed (₹)', callback_data: 'admin_discount_type_fixed' }
+            ]
+        ]
+    };
+    
+    await bot.sendMessage(
+        chatId,
+        'Select discount type:',
+        {
+            reply_markup: buttons
+        }
+    );
+};
 
-async function addDiscount(ctx) {
-  await ctx.reply(
-    "➕ *Add New Discount Code*\n\n" +
-    "Enter discount details in format:\n\n" +
-    "`code|type|value|category_id|min_qty|max_qty|valid_days|usage_limit`\n\n" +
-    "Example:\n" +
-    "`SAVE20|percentage|20|1|1|10|30|100`\n\n" +
-    "Types: percentage, fixed\n" +
-    "Category ID: 0 for all categories",
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        force_reply: true
-      }
-    }
-  );
-  
-  ctx.session = ctx.session || {};
-  ctx.session.adminAction = 'add_discount';
-}
-
-async function deleteDiscount(ctx, discountId) {
-  await global.pool.query(
-    'UPDATE discounts SET status = $1 WHERE id = $2',
-    ['deleted', discountId]
-  );
-
-  await ctx.answerCbQuery('✅ Discount deleted!');
-  await showDiscountMenu(ctx);
-}
-
-async function editDiscount(ctx, discountId) {
-  const discount = await global.pool.query(
-    'SELECT * FROM discounts WHERE id = $1',
-    [discountId]
-  );
-
-  if (discount.rows.length === 0) {
-    return ctx.reply('Discount not found.');
-  }
-
-  const d = discount.rows[0];
-
-  const message = 
-    `✏️ *Edit Discount: ${d.code}*\n\n` +
-    `Current Values:\n` +
-    `Type: ${d.type}\n` +
-    `Value: ${d.value}\n` +
-    `Category ID: ${d.category_id || 'All'}\n` +
-    `Min Quantity: ${d.min_quantity}\n` +
-    `Max Quantity: ${d.max_quantity || 'Unlimited'}\n` +
-    `Valid From: ${moment(d.valid_from).format('DD/MM/YYYY')}\n` +
-    `Valid Until: ${moment(d.valid_until).format('DD/MM/YYYY')}\n` +
-    `Usage Limit: ${d.usage_limit || 'Unlimited'}\n` +
-    `Used: ${d.used_count}\n\n` +
-    `What would you like to edit?`;
-
-  const buttons = [
-    [
-      { text: '💰 Value', callback_data: `admin_discount_edit_value_${d.id}` },
-      { text: '📅 Dates', callback_data: `admin_discount_edit_dates_${d.id}` }
-    ],
-    [
-      { text: '🔢 Limits', callback_data: `admin_discount_edit_limits_${d.id}` },
-      { text: '🔄 Status', callback_data: `admin_discount_edit_status_${d.id}` }
-    ],
-    [{ text: '🔙 Back', callback_data: 'admin_discount' }]
-  ];
-
-  await ctx.editMessageText(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons
-    }
-  });
-}
-
-module.exports = { handle };
+module.exports = {
+    showDiscountMenu,
+    createDiscount,
+    processDiscountCode
+};
