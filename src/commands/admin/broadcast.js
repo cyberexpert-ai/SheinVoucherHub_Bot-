@@ -1,169 +1,152 @@
-const { Markup } = require('telegraf');
+const { getPool } = require('../../database/database');
+const logger = require('../../utils/logger');
+const { sleep } = require('../../utils/helpers');
 
-async function handle(ctx) {
-  const action = ctx.callbackQuery.data;
-  
-  if (action === 'admin_broadcast') {
-    await showBroadcastMenu(ctx);
-  } else if (action === 'admin_broadcast_new') {
-    await newBroadcast(ctx);
-  } else if (action === 'admin_broadcast_history') {
-    await showBroadcastHistory(ctx);
-  } else if (action.startsWith('admin_broadcast_delete_')) {
-    const broadcastId = action.replace('admin_broadcast_delete_', '');
-    await deleteBroadcast(ctx, broadcastId);
-  } else if (action.startsWith('admin_broadcast_resend_')) {
-    const broadcastId = action.replace('admin_broadcast_resend_', '');
-    await resendBroadcast(ctx, broadcastId);
-  }
-}
+const showBroadcastMenu = async (bot, chatId) => {
+    const message = `📢 Broadcast Management
 
-async function showBroadcastMenu(ctx) {
-  const stats = await global.pool.query(`
-    SELECT 
-      COUNT(*) as total,
-      COUNT(*) FILTER (WHERE status = 'pending') as pending,
-      COUNT(*) FILTER (WHERE status = 'sent') as sent,
-      COUNT(*) FILTER (WHERE status = 'failed') as failed
-    FROM broadcasts
-  `);
+Send messages to all users or specific groups.
 
-  const message = 
-    "📢 *Broadcast Management*\n\n" +
-    `📊 *Statistics*\n` +
-    `├ Total Broadcasts: ${stats.rows[0].total}\n` +
-    `├ Pending: ${stats.rows[0].pending}\n` +
-    `├ Sent: ${stats.rows[0].sent}\n` +
-    `└ Failed: ${stats.rows[0].failed}\n`;
+Options:`;
 
-  const buttons = [
-    [
-      { text: '📢 New Broadcast', callback_data: 'admin_broadcast_new' },
-      { text: '📋 History', callback_data: 'admin_broadcast_history' }
-    ],
-    [{ text: '🔙 Back to Admin', callback_data: 'admin_back' }]
-  ];
-
-  await ctx.editMessageText(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons
-    }
-  });
-}
-
-async function newBroadcast(ctx) {
-  await ctx.reply(
-    "📢 *Create New Broadcast*\n\n" +
-    "Send the message you want to broadcast.\n\n" +
-    "You can include:\n" +
-    "• Text with markdown\n" +
-    "• Photo (as caption)\n" +
-    "• Buttons (specify in next step)\n\n" +
-    "Send your message:",
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        force_reply: true
-      }
-    }
-  );
-  
-  ctx.session = ctx.session || {};
-  ctx.session.adminAction = 'create_broadcast_step1';
-}
-
-async function showBroadcastHistory(ctx) {
-  const broadcasts = await global.pool.query(`
-    SELECT * FROM broadcasts 
-    ORDER BY created_at DESC 
-    LIMIT 10
-  `);
-
-  if (broadcasts.rows.length === 0) {
-    return ctx.reply('No broadcasts found.');
-  }
-
-  let message = "📋 *Broadcast History*\n\n";
-  const buttons = [];
-
-  broadcasts.rows.forEach((b, i) => {
-    const statusEmoji = b.status === 'sent' ? '✅' : 
-                       b.status === 'pending' ? '⏳' : '❌';
-    message += `${i+1}. ${statusEmoji} ${new Date(b.created_at).toLocaleDateString()}\n`;
-    message += `   Sent: ${b.sent_count}/${b.total_count}\n`;
-    message += `   Target: ${b.target_type || 'all'}\n\n`;
+    const buttons = [
+        [
+            { text: '📢 Send to All', callback_data: 'admin_broadcast_all' },
+            { text: '🎯 Send to Active', callback_data: 'admin_broadcast_active' }
+        ],
+        [
+            { text: '📊 Previous Broadcasts', callback_data: 'admin_broadcast_list' },
+            { text: '🗑 Delete Broadcast', callback_data: 'admin_broadcast_delete' }
+        ],
+        [{ text: '↩️ Back', callback_data: 'admin_back' }]
+    ];
     
-    buttons.push([
-      { text: `📢 View #${i+1}`, callback_data: `admin_broadcast_view_${b.id}` },
-      { text: `🗑 Delete`, callback_data: `admin_broadcast_delete_${b.id}` }
-    ]);
-  });
+    await bot.sendMessage(chatId, message, {
+        reply_markup: { inline_keyboard: buttons }
+    });
+};
 
-  buttons.push([{ text: '🔙 Back', callback_data: 'admin_broadcast' }]);
+const startBroadcast = async (bot, chatId, userId, target) => {
+    const pool = getPool();
+    
+    await pool.query(
+        `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE 
+         SET temp_data = $2, updated_at = NOW()`,
+        [userId, { action: 'admin_broadcast_msg', target }]
+    );
+    
+    await bot.sendMessage(
+        chatId,
+        'Enter broadcast message (can include HTML formatting):',
+        {
+            reply_markup: { force_reply: true }
+        }
+    );
+};
 
-  await ctx.reply(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons
+const processBroadcastMessage = async (bot, chatId, userId, text, session) => {
+    const pool = getPool();
+    
+    // Store message and ask for confirmation
+    await pool.query(
+        `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE 
+         SET temp_data = $2, updated_at = NOW()`,
+        [userId, { action: 'admin_broadcast_confirm', target: session.target, message: text }]
+    );
+    
+    const preview = `Broadcast Preview:\n\n${text}\n\nSend to ${session.target === 'all' ? 'ALL users' : 'active users'}?`;
+    
+    const buttons = [
+        [
+            { text: '✅ Send', callback_data: 'admin_broadcast_send' },
+            { text: '❌ Cancel', callback_data: 'admin_broadcast_cancel' }
+        ]
+    ];
+    
+    await bot.sendMessage(chatId, preview, {
+        parse_mode: 'HTML',
+        reply_markup: { inline_keyboard: buttons }
+    });
+};
+
+const sendBroadcast = async (bot, chatId, userId) => {
+    const pool = getPool();
+    
+    const session = await pool.query(
+        'SELECT temp_data FROM user_sessions WHERE user_id = $1',
+        [userId]
+    );
+    
+    if (session.rows.length === 0 || !session.rows[0].temp_data) {
+        await bot.sendMessage(chatId, '❌ Session expired.');
+        return;
     }
-  });
-}
-
-async function deleteBroadcast(ctx, broadcastId) {
-  await global.pool.query('DELETE FROM broadcasts WHERE id = $1', [broadcastId]);
-  await ctx.answerCbQuery('✅ Broadcast deleted!');
-}
-
-async function resendBroadcast(ctx, broadcastId) {
-  const broadcast = await global.pool.query(
-    'SELECT * FROM broadcasts WHERE id = $1',
-    [broadcastId]
-  );
-
-  if (broadcast.rows.length === 0) {
-    return ctx.reply('Broadcast not found.');
-  }
-
-  const b = broadcast.rows[0];
-
-  // Get all active users
-  const users = await global.pool.query(
-    'SELECT user_id FROM users WHERE status = $1',
-    ['active']
-  );
-
-  let sent = 0;
-  let failed = 0;
-
-  for (const user of users.rows) {
-    try {
-      await ctx.telegram.sendMessage(user.user_id, b.message, {
-        parse_mode: 'Markdown',
-        ...(b.buttons ? { reply_markup: b.buttons } : {})
-      });
-      sent++;
-    } catch (error) {
-      failed++;
+    
+    const { target, message } = session.rows[0].temp_data;
+    
+    // Get users
+    let users;
+    if (target === 'all') {
+        users = await pool.query(
+            'SELECT user_id FROM users WHERE is_blocked = false'
+        );
+    } else {
+        users = await pool.query(
+            `SELECT user_id FROM users 
+             WHERE is_blocked = false 
+             AND last_active > NOW() - INTERVAL '7 days'`
+        );
     }
+    
+    await bot.sendMessage(chatId, `📢 Sending broadcast to ${users.rows.length} users...`);
+    
+    let sent = 0;
+    let failed = 0;
+    
+    for (const user of users.rows) {
+        try {
+            await bot.sendMessage(user.user_id, message, { parse_mode: 'HTML' });
+            sent++;
+            
+            // Rate limiting
+            if (sent % 20 === 0) {
+                await sleep(1000);
+            }
+        } catch (error) {
+            failed++;
+            logger.error(`Failed to send broadcast to ${user.user_id}:`, error);
+        }
+    }
+    
+    // Save broadcast record
+    await pool.query(
+        `INSERT INTO broadcasts (message_text, target_users, sent_count, failed_count, created_by)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [message, target, sent, failed, userId]
+    );
+    
+    await bot.sendMessage(
+        chatId,
+        `✅ Broadcast completed!\n\nSent: ${sent}\nFailed: ${failed}`
+    );
+    
+    // Clear session
+    await pool.query(
+        'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+        [userId]
+    );
+    
+    // Show broadcast menu
+    await showBroadcastMenu(bot, chatId);
+};
 
-    // Rate limiting
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
-
-  await global.pool.query(
-    `UPDATE broadcasts 
-     SET status = 'sent', sent_count = $1, total_count = $2 
-     WHERE id = $3`,
-    [sent, users.rowCount, broadcastId]
-  );
-
-  await ctx.reply(
-    `✅ *Broadcast Resent*\n\n` +
-    `Total Users: ${users.rowCount}\n` +
-    `✅ Sent: ${sent}\n` +
-    `❌ Failed: ${failed}`
-  );
-}
-
-module.exports = { handle };
+module.exports = {
+    showBroadcastMenu,
+    startBroadcast,
+    processBroadcastMessage,
+    sendBroadcast
+};
