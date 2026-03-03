@@ -9,15 +9,19 @@ const showSecurityMenu = async (bot, chatId) => {
             (SELECT COUNT(*) FROM utr_tracking WHERE used_at > NOW() - INTERVAL '24 hours') as utr_24h,
             (SELECT COUNT(*) FROM blocked_utrs) as blocked_utrs,
             (SELECT COUNT(*) FROM users WHERE is_blocked = true) as blocked_users,
-            (SELECT COUNT(*) FROM users WHERE block_expires > NOW()) as temp_blocked
+            (SELECT COUNT(*) FROM users WHERE block_expires > NOW()) as temp_blocked,
+            (SELECT COUNT(*) FROM fraud_alerts WHERE resolved = false) as open_alerts
     `);
     
     const message = `🔒 Security Management
 
-24h UTRs: ${stats.rows[0].utr_24h}
+📊 Current Status:
+━━━━━━━━━━━━━━━━━━
+UTRs (24h): ${stats.rows[0].utr_24h}
 Blocked UTRs: ${stats.rows[0].blocked_utrs}
 Blocked Users: ${stats.rows[0].blocked_users}
 Temp Blocked: ${stats.rows[0].temp_blocked}
+Open Alerts: ${stats.rows[0].open_alerts}
 
 Options:`;
 
@@ -31,8 +35,8 @@ Options:`;
             { text: '🔍 Check UTR', callback_data: 'admin_checkutr' }
         ],
         [
-            { text: '🗑 Clean Old', callback_data: 'admin_cleansecurity' },
-            { text: '📊 Fraud Stats', callback_data: 'admin_fraudstats' }
+            { text: '⚠️ Fraud Alerts', callback_data: 'admin_fraudalerts' },
+            { text: '📊 Security Stats', callback_data: 'admin_secstats' }
         ],
         [{ text: '↩️ Back', callback_data: 'admin_back' }]
     ];
