@@ -1,179 +1,80 @@
-const db = require('../../database/database');
+const { getPool } = require('../../database/database');
+const logger = require('../../utils/logger');
+const { formatCurrency } = require('../../utils/helpers');
 
-async function managePrices(bot, chatId, userId) {
-    const categories = await db.getCategories(true);
+const showPriceMenu = async (bot, chatId) => {
+    const pool = getPool();
     
-    let message = '💰 Price Management\n━━━━━━━━━━━━━━━━\n\n';
+    const categories = await pool.query(
+        'SELECT * FROM categories ORDER BY category_id'
+    );
     
-    for (const cat of categories) {
-        const prices = await db.query(
-            'SELECT quantity, price FROM price_tiers WHERE category_id = ? ORDER BY quantity LIMIT 5',
-            [cat.id]
-        );
-        
-        message += `${cat.name} prices:\n`;
-        for (const p of prices) {
-            message += `  ${p.quantity} code(s): ₹${p.price}\n`;
-        }
-        message += '\n';
-    }
+    let message = '💰 Price Management\n\n';
+    message += 'Current Category Prices:\n\n';
     
-    const keyboard = [
-        ['✏️ Edit Prices', '📊 Bulk Update'],
-        ['↩️ Back to Admin']
-    ];
-    
-    await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            keyboard: keyboard,
-            resize_keyboard: true
-        }
-    });
-}
-
-async function editPrices(bot, chatId, userId) {
-    const categories = await db.getCategories(true);
-    
-    let message = '✏️ Edit Prices\n\nSelect category:\n';
     const buttons = [];
     
-    for (const cat of categories) {
-        buttons.push([{
-            text: cat.name,
-            callback_data: `admin_editprice_${cat.id}`
-        }]);
-    }
-    buttons.push([{ text: '↩️ Cancel', callback_data: 'admin_back' }]);
+    categories.rows.forEach(cat => {
+        message += `${cat.name}:\n`;
+        message += `1 Qty: ${formatCurrency(cat.price_1)}\n`;
+        message += `2 Qty: ${formatCurrency(cat.price_2)}\n`;
+        message += `3 Qty: ${formatCurrency(cat.price_3)}\n`;
+        message += `4 Qty: ${formatCurrency(cat.price_4)}\n`;
+        message += `5 Qty: ${formatCurrency(cat.price_5)}\n`;
+        message += `Custom: ${formatCurrency(cat.price_custom)}/each\n`;
+        message += '━━━━━━━━━━━━━━━━━━\n';
+        
+        buttons.push([
+            { text: `✏️ Edit ${cat.name}`, callback_data: `admin_editprice_${cat.category_id}` }
+        ]);
+    });
+    
+    buttons.push([
+        { text: '📊 Bulk Update', callback_data: 'admin_bulkprice' },
+        { text: '↩️ Back', callback_data: 'admin_back' }
+    ]);
     
     await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            inline_keyboard: buttons
-        }
+        reply_markup: { inline_keyboard: buttons }
     });
-}
+};
 
-async function showPriceEditor(bot, chatId, userId, categoryId) {
-    const category = await db.getCategory(categoryId);
-    const prices = await db.query(
-        'SELECT quantity, price FROM price_tiers WHERE category_id = ? ORDER BY quantity',
-        [categoryId]
+const editCategoryPrice = async (bot, chatId, userId, categoryId) => {
+    const pool = getPool();
+    
+    await pool.query(
+        `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE 
+         SET temp_data = $2, updated_at = NOW()`,
+        [userId, { action: 'admin_editprice_qty', categoryId }]
     );
     
-    let message = `✏️ Editing ${category.name} Prices\n\n`;
-    message += `Current prices:\n`;
-    for (const p of prices) {
-        message += `  ${p.quantity}: ₹${p.price}\n`;
-    }
-    message += `\nSend new prices in format:\n`;
-    message += `quantity1:price1,quantity2:price2\n`;
-    message += `Example: 1:49,5:249,10:498\n\n`;
-    message += `Or send "auto" to generate automatically.`;
-    
-    const msg = await bot.sendMessage(chatId, message, {
-        reply_markup: {
-            force_reply: true,
-            selective: true
-        }
-    });
-    
-    global.waitingFor = global.waitingFor || {};
-    global.waitingFor[userId] = {
-        type: 'admin_update_prices',
-        categoryId: categoryId,
-        messageId: msg.message_id
+    const buttons = {
+        inline_keyboard: [
+            [
+                { text: 'Price for 1', callback_data: 'admin_price_qty_1' },
+                { text: 'Price for 2', callback_data: 'admin_price_qty_2' },
+                { text: 'Price for 3', callback_data: 'admin_price_qty_3' }
+            ],
+            [
+                { text: 'Price for 4', callback_data: 'admin_price_qty_4' },
+                { text: 'Price for 5', callback_data: 'admin_price_qty_5' },
+                { text: 'Custom Price', callback_data: 'admin_price_qty_custom' }
+            ]
+        ]
     };
-}
-
-async function updatePrices(bot, chatId, userId, categoryId, text) {
-    const category = await db.getCategory(categoryId);
     
-    if (text.toLowerCase() === 'auto') {
-        // Generate automatic prices
-        const basePrice = category.value === 500 ? 49 :
-                         category.value === 1000 ? 99 :
-                         category.value === 2000 ? 199 : 299;
-        
-        for (let i = 1; i <= 100; i++) {
-            let price = basePrice * i;
-            if (i > 80) price = Math.round(price * 0.98);
-            else if (i > 50) price = Math.round(price * 0.99);
-            await db.updatePriceTier(categoryId, i, price);
-        }
-        
-        await bot.sendMessage(chatId, `✅ Auto-generated prices for ${category.name}`);
-        return;
-    }
-    
-    // Parse custom prices
-    const pairs = text.split(',').map(p => p.trim());
-    let updated = 0;
-    
-    for (const pair of pairs) {
-        const [qtyStr, priceStr] = pair.split(':').map(s => s.trim());
-        const quantity = parseInt(qtyStr);
-        const price = parseFloat(priceStr);
-        
-        if (!isNaN(quantity) && !isNaN(price) && quantity > 0 && price > 0) {
-            await db.updatePriceTier(categoryId, quantity, price);
-            updated++;
-        }
-    }
-    
-    await bot.sendMessage(chatId, `✅ Updated ${updated} price tiers for ${category.name}`);
-}
-
-async function bulkUpdatePrices(bot, chatId, userId) {
-    const msg = await bot.sendMessage(chatId,
-        `📊 Bulk Price Update\n\n` +
-        `Send prices for all categories in format:\n` +
-        `CategoryID:Qty:Price\n` +
-        `One per line\n\n` +
-        `Example:\n` +
-        `1:1:49\n` +
-        `1:5:249\n` +
-        `2:1:99\n`,
+    await bot.sendMessage(
+        chatId,
+        'Select quantity tier to edit:',
         {
-            reply_markup: {
-                force_reply: true,
-                selective: true
-            }
+            reply_markup: buttons
         }
     );
-    
-    global.waitingFor = global.waitingFor || {};
-    global.waitingFor[userId] = {
-        type: 'admin_bulk_prices',
-        messageId: msg.message_id
-    };
-}
-
-async function processBulkPrices(bot, chatId, userId, text) {
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    let updated = 0;
-    
-    for (const line of lines) {
-        const [catIdStr, qtyStr, priceStr] = line.split(':').map(s => s.trim());
-        const catId = parseInt(catIdStr);
-        const quantity = parseInt(qtyStr);
-        const price = parseFloat(priceStr);
-        
-        if (!isNaN(catId) && !isNaN(quantity) && !isNaN(price)) {
-            const category = await db.getCategory(catId);
-            if (category) {
-                await db.updatePriceTier(catId, quantity, price);
-                updated++;
-            }
-        }
-    }
-    
-    await bot.sendMessage(chatId, `✅ Updated ${updated} price tiers.`);
-}
+};
 
 module.exports = {
-    managePrices,
-    editPrices,
-    showPriceEditor,
-    updatePrices,
-    bulkUpdatePrices,
-    processBulkPrices
+    showPriceMenu,
+    editCategoryPrice
 };
