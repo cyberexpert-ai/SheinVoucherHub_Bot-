@@ -1,80 +1,93 @@
-const { Markup } = require('telegraf');
-const moment = require('moment');
+const { getPool } = require('../../database/database');
+const logger = require('../../utils/logger');
+const { formatCurrency } = require('../../utils/helpers');
 
-async function show(ctx) {
-  const stats = await global.pool.query(`
-    SELECT
-      -- User stats
-      (SELECT COUNT(*) FROM users) as total_users,
-      (SELECT COUNT(*) FROM users WHERE joined_at > NOW() - INTERVAL '24 hours') as users_24h,
-      (SELECT COUNT(*) FROM users WHERE joined_at > NOW() - INTERVAL '7 days') as users_7d,
-      
-      -- Order stats
-      (SELECT COUNT(*) FROM orders) as total_orders,
-      (SELECT COUNT(*) FROM orders WHERE status = 'completed') as completed_orders,
-      (SELECT COUNT(*) FROM orders WHERE status = 'pending') as pending_orders,
-      (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE status = 'completed') as total_revenue,
-      (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE created_at > NOW() - INTERVAL '24 hours') as revenue_24h,
-      (SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE created_at > NOW() - INTERVAL '7 days') as revenue_7d,
-      
-      -- Voucher stats
-      (SELECT COUNT(*) FROM vouchers) as total_vouchers,
-      (SELECT COUNT(*) FROM vouchers WHERE status = 'available') as available_vouchers,
-      (SELECT COUNT(*) FROM vouchers WHERE status = 'sold') as sold_vouchers,
-      
-      -- Category stats
-      (SELECT COUNT(*) FROM categories WHERE status = 'active') as active_categories,
-      
-      -- Support stats
-      (SELECT COUNT(*) FROM support_tickets WHERE status = 'open') as open_tickets,
-      (SELECT COUNT(*) FROM support_tickets WHERE created_at > NOW() - INTERVAL '24 hours') as tickets_24h
-  `);
-
-  const s = stats.rows[0];
-
-  const message = 
-    "📈 *Bot Statistics*\n\n" +
-    "👥 *Users*\n" +
-    `├ Total: ${s.total_users}\n` +
-    `├ Last 24h: ${s.users_24h}\n` +
-    `└ Last 7d: ${s.users_7d}\n\n` +
+const showStats = async (bot, chatId) => {
+    const pool = getPool();
     
-    "📦 *Orders*\n" +
-    `├ Total: ${s.total_orders}\n` +
-    `├ Completed: ${s.completed_orders}\n` +
-    `├ Pending: ${s.pending_orders}\n` +
-    `└ Success Rate: ${s.total_orders > 0 ? Math.round((s.completed_orders / s.total_orders) * 100) : 0}%\n\n` +
-    
-    "💰 *Revenue*\n" +
-    `├ Total: ₹${parseFloat(s.total_revenue).toFixed(2)}\n` +
-    `├ Last 24h: ₹${parseFloat(s.revenue_24h).toFixed(2)}\n` +
-    `└ Last 7d: ₹${parseFloat(s.revenue_7d).toFixed(2)}\n\n` +
-    
-    "🎟 *Vouchers*\n" +
-    `├ Total: ${s.total_vouchers}\n` +
-    `├ Available: ${s.available_vouchers}\n` +
-    `├ Sold: ${s.sold_vouchers}\n` +
-    `└ Utilization: ${s.total_vouchers > 0 ? Math.round((s.sold_vouchers / s.total_vouchers) * 100) : 0}%\n\n` +
-    
-    "📊 *Other*\n" +
-    `├ Active Categories: ${s.active_categories}\n` +
-    `├ Open Tickets: ${s.open_tickets}\n` +
-    `└ Tickets (24h): ${s.tickets_24h}\n`;
-
-  const buttons = [
-    [
-      { text: '📊 Detailed Report', callback_data: 'admin_stats_detailed' },
-      { text: '📈 Export CSV', callback_data: 'admin_stats_export' }
-    ],
-    [{ text: '🔙 Back to Admin', callback_data: 'admin_back' }]
-  ];
-
-  await ctx.editMessageText(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons
+    try {
+        // Overall stats
+        const overall = await pool.query(`
+            SELECT 
+                (SELECT COUNT(*) FROM users) as total_users,
+                (SELECT COUNT(*) FROM users WHERE last_active > NOW() - INTERVAL '24 hours') as active_24h,
+                (SELECT COUNT(*) FROM users WHERE joined_at > NOW() - INTERVAL '7 days') as new_week,
+                (SELECT COUNT(*) FROM orders) as total_orders,
+                (SELECT COUNT(*) FROM orders WHERE status = 'pending') as pending_orders,
+                (SELECT COUNT(*) FROM orders WHERE status = 'successful') as successful_orders,
+                (SELECT COALESCE(SUM(total_price), 0) FROM orders WHERE status = 'successful') as total_revenue
+        `);
+        
+        // Daily stats for last 7 days
+        const daily = await pool.query(`
+            SELECT 
+                DATE(created_at) as date,
+                COUNT(*) as orders,
+                COALESCE(SUM(CASE WHEN status = 'successful' THEN total_price ELSE 0 END), 0) as revenue
+            FROM orders
+            WHERE created_at > NOW() - INTERVAL '7 days'
+            GROUP BY DATE(created_at)
+            ORDER BY date DESC
+        `);
+        
+        // Category stats
+        const categories = await pool.query(`
+            SELECT 
+                c.name,
+                c.stock,
+                COUNT(v.voucher_id) as total_vouchers,
+                SUM(CASE WHEN v.is_sold THEN 1 ELSE 0 END) as sold
+            FROM categories c
+            LEFT JOIN vouchers v ON c.category_id = v.category_id
+            GROUP BY c.category_id, c.name, c.stock
+            ORDER BY c.category_id
+        `);
+        
+        let message = '📊 Detailed Statistics\n\n';
+        message += '━━━━━━━━━━━━━━━━━━\n';
+        message += '📈 OVERALL\n';
+        message += '━━━━━━━━━━━━━━━━━━\n';
+        message += `👥 Total Users: ${overall.rows[0].total_users}\n`;
+        message += `🟢 Active (24h): ${overall.rows[0].active_24h}\n`;
+        message += `🆕 New (7d): ${overall.rows[0].new_week}\n`;
+        message += `📦 Total Orders: ${overall.rows[0].total_orders}\n`;
+        message += `⏳ Pending: ${overall.rows[0].pending_orders}\n`;
+        message += `✅ Successful: ${overall.rows[0].successful_orders}\n`;
+        message += `💰 Total Revenue: ${formatCurrency(overall.rows[0].total_revenue)}\n\n`;
+        
+        message += '━━━━━━━━━━━━━━━━━━\n';
+        message += '📅 LAST 7 DAYS\n';
+        message += '━━━━━━━━━━━━━━━━━━\n';
+        daily.rows.forEach(day => {
+            message += `${day.date}: ${day.orders} orders | ${formatCurrency(day.revenue)}\n`;
+        });
+        message += '\n';
+        
+        message += '━━━━━━━━━━━━━━━━━━\n';
+        message += '📦 CATEGORY STOCKS\n';
+        message += '━━━━━━━━━━━━━━━━━━\n';
+        categories.rows.forEach(cat => {
+            message += `${cat.name}: Stock ${cat.stock} | Total ${cat.total_vouchers} | Sold ${cat.sold || 0}\n`;
+        });
+        
+        const buttons = [
+            [
+                { text: '📊 Refresh', callback_data: 'admin_stats' },
+                { text: '📥 Export', callback_data: 'admin_exportstats' }
+            ],
+            [{ text: '↩️ Back', callback_data: 'admin_back' }]
+        ];
+        
+        await bot.sendMessage(chatId, message, {
+            reply_markup: { inline_keyboard: buttons }
+        });
+        
+    } catch (error) {
+        logger.error('Error showing stats:', error);
+        await bot.sendMessage(chatId, '❌ Error loading statistics.');
     }
-  });
-}
+};
 
-module.exports = { show };
+module.exports = {
+    showStats
+};
