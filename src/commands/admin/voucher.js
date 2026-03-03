@@ -1,156 +1,215 @@
-const { Markup } = require('telegraf');
+const { getPool } = require('../../database/database');
+const logger = require('../../utils/logger');
+const { chunkArray } = require('../../utils/helpers');
 
-async function handle(ctx) {
-  const action = ctx.callbackQuery.data;
-  
-  if (action === 'admin_voucher') {
-    await showVoucherMenu(ctx);
-  } else if (action.startsWith('admin_voucher_add_')) {
-    const categoryId = action.replace('admin_voucher_add_', '');
-    await addVoucher(ctx, categoryId);
-  } else if (action.startsWith('admin_voucher_bulk_')) {
-    const categoryId = action.replace('admin_voucher_bulk_', '');
-    await bulkAddVouchers(ctx, categoryId);
-  } else if (action.startsWith('admin_voucher_delete_')) {
-    const voucherId = action.replace('admin_voucher_delete_', '');
-    await deleteVoucher(ctx, voucherId);
-  } else if (action.startsWith('admin_voucher_category_')) {
-    const categoryId = action.replace('admin_voucher_category_', '');
-    await showCategoryVouchers(ctx, categoryId);
-  }
-}
-
-async function showVoucherMenu(ctx) {
-  const categories = await global.pool.query(`
-    SELECT c.*, COUNT(v.id) as voucher_count
-    FROM categories c
-    LEFT JOIN vouchers v ON c.id = v.category_id
-    GROUP BY c.id
-    ORDER BY c.value ASC
-  `);
-
-  let message = "🎟 *Voucher Management*\n\nSelect a category:\n\n";
-  const buttons = [];
-
-  for (const cat of categories.rows) {
-    message += `• ${cat.name} - ${cat.voucher_count} vouchers\n`;
-    buttons.push([
-      { text: `📦 ${cat.name}`, callback_data: `admin_voucher_category_${cat.id}` }
-    ]);
-  }
-
-  buttons.push([{ text: '🔙 Back to Admin', callback_data: 'admin_back' }]);
-
-  await ctx.editMessageText(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons
-    }
-  });
-}
-
-async function showCategoryVouchers(ctx, categoryId) {
-  const category = await global.pool.query(
-    'SELECT * FROM categories WHERE id = $1',
-    [categoryId]
-  );
-
-  if (category.rows.length === 0) {
-    return ctx.reply('Category not found.');
-  }
-
-  const cat = category.rows[0];
-
-  const vouchers = await global.pool.query(`
-    SELECT v.*, u.username as purchased_by_username
-    FROM vouchers v
-    LEFT JOIN users u ON v.purchased_by = u.user_id
-    WHERE v.category_id = $1
-    ORDER BY v.status, v.created_at DESC
-    LIMIT 20
-  `, [categoryId]);
-
-  let message = `🎟 *Vouchers - ${cat.name}*\n\n`;
-  message += `Total: ${vouchers.rowCount} vouchers\n\n`;
-
-  const available = vouchers.rows.filter(v => v.status === 'available').length;
-  const sold = vouchers.rows.filter(v => v.status === 'sold').length;
-  
-  message += `📦 Available: ${available}\n`;
-  message += `✅ Sold: ${sold}\n\n`;
-
-  if (vouchers.rows.length > 0) {
-    message += "*Recent Vouchers:*\n";
-    vouchers.rows.slice(0, 5).forEach((v, i) => {
-      const statusEmoji = v.status === 'available' ? '🟢' : '🔴';
-      message += `${statusEmoji} \`${v.code}\` - ${v.status}\n`;
+const showVoucherMenu = async (bot, chatId) => {
+    const pool = getPool();
+    
+    const categories = await pool.query(
+        'SELECT category_id, name, stock FROM categories ORDER BY category_id'
+    );
+    
+    let message = '🎟 Voucher Management\n\n';
+    message += 'Select category to manage vouchers:\n\n';
+    
+    const buttons = [];
+    
+    categories.rows.forEach(cat => {
+        message += `• ${cat.name} (Stock: ${cat.stock})\n`;
+        buttons.push([
+            { text: cat.name, callback_data: `admin_vcat_${cat.category_id}` }
+        ]);
     });
-  }
+    
+    buttons.push([{ text: '↩️ Back', callback_data: 'admin_back' }]);
+    
+    await bot.sendMessage(chatId, message, {
+        reply_markup: { inline_keyboard: buttons }
+    });
+};
 
-  const buttons = [
-    [
-      { text: '➕ Add Single', callback_data: `admin_voucher_add_${categoryId}` },
-      { text: '📚 Bulk Add', callback_data: `admin_voucher_bulk_${categoryId}` }
-    ],
-    [
-      { text: '🗑 Delete All Available', callback_data: `admin_voucher_clear_${categoryId}` }
-    ],
-    [{ text: '🔙 Back', callback_data: 'admin_voucher' }]
-  ];
-
-  await ctx.editMessageText(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons
+const showCategoryVouchers = async (bot, chatId, categoryId) => {
+    const pool = getPool();
+    
+    const category = await pool.query(
+        'SELECT * FROM categories WHERE category_id = $1',
+        [categoryId]
+    );
+    
+    if (category.rows.length === 0) {
+        await bot.sendMessage(chatId, '❌ Category not found.');
+        return;
     }
-  });
-}
+    
+    const cat = category.rows[0];
+    
+    const voucherCount = await pool.query(
+        'SELECT COUNT(*) as total, SUM(CASE WHEN is_sold THEN 1 ELSE 0 END) as sold FROM vouchers WHERE category_id = $1',
+        [categoryId]
+    );
+    
+    const counts = voucherCount.rows[0];
+    
+    const message = `🎟 ${cat.name} Vouchers
 
-async function addVoucher(ctx, categoryId) {
-  await ctx.reply(
-    "➕ *Add Single Voucher*\n\n" +
-    "Send the voucher code:",
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        force_reply: true
-      }
+Total Vouchers: ${counts.total || 0}
+Sold: ${counts.sold || 0}
+Available: ${cat.stock}
+
+Options:`;
+
+    const buttons = [
+        [
+            { text: '➕ Add Single', callback_data: `admin_addone_${categoryId}` },
+            { text: '📦 Add Bulk', callback_data: `admin_addbulk_${categoryId}` }
+        ],
+        [
+            { text: '📋 List Vouchers', callback_data: `admin_list_${categoryId}` },
+            { text: '🗑 Delete All', callback_data: `admin_delall_${categoryId}` }
+        ],
+        [{ text: '↩️ Back', callback_data: 'admin_voucher' }]
+    ];
+    
+    await bot.sendMessage(chatId, message, {
+        reply_markup: { inline_keyboard: buttons }
+    });
+};
+
+const addSingleVoucher = async (bot, chatId, userId, categoryId) => {
+    const pool = getPool();
+    
+    await pool.query(
+        `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE 
+         SET temp_data = $2, updated_at = NOW()`,
+        [userId, { action: 'admin_addsingle', categoryId }]
+    );
+    
+    await bot.sendMessage(
+        chatId,
+        'Enter voucher code:',
+        {
+            reply_markup: { force_reply: true }
+        }
+    );
+};
+
+const processAddSingleVoucher = async (bot, chatId, userId, text, session) => {
+    const pool = getPool();
+    
+    // Check if code already exists
+    const existing = await pool.query(
+        'SELECT * FROM vouchers WHERE code = $1',
+        [text]
+    );
+    
+    if (existing.rows.length > 0) {
+        await bot.sendMessage(chatId, '❌ This voucher code already exists!');
+        return;
     }
-  );
-  
-  ctx.session = ctx.session || {};
-  ctx.session.adminAction = 'add_voucher';
-  ctx.session.categoryId = categoryId;
-}
+    
+    // Add voucher
+    await pool.query(
+        `INSERT INTO vouchers (category_id, code, is_sold)
+         VALUES ($1, $2, false)`,
+        [session.categoryId, text]
+    );
+    
+    // Update stock
+    await pool.query(
+        `UPDATE categories 
+         SET stock = stock + 1 
+         WHERE category_id = $1`,
+        [session.categoryId]
+    );
+    
+    await bot.sendMessage(chatId, '✅ Voucher added successfully!');
+    
+    // Clear session
+    await pool.query(
+        'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+        [userId]
+    );
+    
+    // Show category vouchers again
+    await showCategoryVouchers(bot, chatId, session.categoryId);
+};
 
-async function bulkAddVouchers(ctx, categoryId) {
-  await ctx.reply(
-    "📚 *Bulk Add Vouchers*\n\n" +
-    "Send voucher codes (one per line):\n\n" +
-    "Example:\n" +
-    "CODE123\n" +
-    "CODE456\n" +
-    "CODE789",
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        force_reply: true
-      }
+const addBulkVouchers = async (bot, chatId, userId, categoryId) => {
+    const pool = getPool();
+    
+    await pool.query(
+        `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE 
+         SET temp_data = $2, updated_at = NOW()`,
+        [userId, { action: 'admin_addbulk', categoryId }]
+    );
+    
+    await bot.sendMessage(
+        chatId,
+        'Send voucher codes (one per line):',
+        {
+            reply_markup: { force_reply: true }
+        }
+    );
+};
+
+const processAddBulkVouchers = async (bot, chatId, userId, text, session) => {
+    const codes = text.split('\n').map(c => c.trim()).filter(c => c.length > 0);
+    
+    if (codes.length === 0) {
+        await bot.sendMessage(chatId, '❌ No valid codes found.');
+        return;
     }
-  );
-  
-  ctx.session = ctx.session || {};
-  ctx.session.adminAction = 'bulk_add_vouchers';
-  ctx.session.categoryId = categoryId;
-}
+    
+    const pool = getPool();
+    
+    // Insert codes
+    let added = 0;
+    for (const code of codes) {
+        try {
+            await pool.query(
+                `INSERT INTO vouchers (category_id, code, is_sold)
+                 VALUES ($1, $2, false)`,
+                [session.categoryId, code]
+            );
+            added++;
+        } catch (error) {
+            // Code might be duplicate
+            logger.error('Error adding bulk voucher:', error);
+        }
+    }
+    
+    // Update stock
+    await pool.query(
+        `UPDATE categories 
+         SET stock = stock + $1 
+         WHERE category_id = $2`,
+        [added, session.categoryId]
+    );
+    
+    await bot.sendMessage(
+        chatId,
+        `✅ Added ${added} out of ${codes.length} vouchers successfully!`
+    );
+    
+    // Clear session
+    await pool.query(
+        'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+        [userId]
+    );
+    
+    // Show category vouchers again
+    await showCategoryVouchers(bot, chatId, session.categoryId);
+};
 
-async function deleteVoucher(ctx, voucherId) {
-  await global.pool.query(
-    'DELETE FROM vouchers WHERE id = $1 AND status = $2',
-    [voucherId, 'available']
-  );
-  
-  await ctx.answerCbQuery('✅ Voucher deleted successfully!');
-}
-
-module.exports = { handle };
+module.exports = {
+    showVoucherMenu,
+    showCategoryVouchers,
+    addSingleVoucher,
+    processAddSingleVoucher,
+    addBulkVouchers,
+    processAddBulkVouchers
+};
