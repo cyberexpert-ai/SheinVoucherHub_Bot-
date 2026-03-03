@@ -1,229 +1,94 @@
-// src/index.js - FINAL WORKING VERSION
+const TelegramBot = require('node-telegram-bot-api');
+const express = require('express');
+const dotenv = require('dotenv');
+const path = require('path');
 
-const express = require("express");
-const { Telegraf } = require("telegraf");
-const dotenv = require("dotenv");
-const { Pool } = require("pg");
-
-// Load environment variables
 dotenv.config();
 
-// Import modules
-const { initDatabase } = require("./database/database");
-const { channelCheck } = require("./middlewares/channelCheck");
-const messageHandler = require("./handlers/messageHandler");
-const callbackHandler = require("./handlers/callbackHandler");
-const paymentHandler = require("./handlers/paymentHandler");
-const logger = require("./utils/logger");
-const { deleteOldMessage, saveUser } = require("./utils/helpers");
+const { initDatabase } = require('./database/database');
+const logger = require('./utils/logger');
+const { handleMessage } = require('./handlers/messageHandler');
+const { handleCallback } = require('./handlers/callbackHandler');
+const { handlePayment } = require('./handlers/paymentHandler');
 
-// Initialize Express app
+// Initialize Express app for health checks
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health check route
-app.get("/", (req, res) => {
-  res.status(200).send("🤖 Shein Voucher Hub Bot is Running");
+// Health check endpoints
+app.get('/', (req, res) => {
+  res.status(200).send('🤖 Shein Voucher Hub Bot is running');
 });
 
-app.get("/health", (req, res) => {
-  res.status(200).json({ 
-    status: "OK", 
-    timestamp: new Date().toISOString(),
-    bot: "active"
-  });
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Initialize bot
-const bot = new Telegraf(process.env.BOT_TOKEN);
-
-// Initialize database
-const pool = new Pool({
-  connectionString: process.env.DB_URL,
-  ssl: {
-    rejectUnauthorized: false
-  }
+// Initialize Telegram Bot
+const bot = new TelegramBot(process.env.BOT_TOKEN, { 
+  polling: true,
+  filepath: false
 });
 
-// Make bot and pool available globally
+// Store bot instance globally
 global.bot = bot;
-global.pool = pool;
-global.logger = logger;
 
-// ============= IMPORT COMMAND MODULES =============
-console.log("Loading command modules...");
+// Initialize Database
+initDatabase().then(() => {
+  logger.info('Database initialized successfully');
+}).catch(err => {
+  logger.error('Database initialization failed:', err);
+  process.exit(1);
+});
 
-const startCommand = require('./commands/start');
-const adminCommands = require('./commands/admin');
-const userCommands = require('./commands/user');
+// Middleware for logging
+bot.on('message', (msg) => {
+  logger.info(`Received message from ${msg.from.id}: ${msg.text}`);
+});
 
-// Debug: Check what was loaded
-console.log("=== DEBUG INFO ===");
-console.log("startCommand type:", typeof startCommand);
-console.log("startCommand keys:", Object.keys(startCommand));
-console.log("adminCommands type:", typeof adminCommands);
-console.log("adminCommands keys:", Object.keys(adminCommands));
-console.log("userCommands type:", typeof userCommands);
-console.log("userCommands keys:", Object.keys(userCommands));
-console.log("==================");
-
-// ============= MIDDLEWARES =============
-
-// Save user middleware
-bot.use(async (ctx, next) => {
+// Message handler
+bot.on('message', async (msg) => {
   try {
-    if (ctx.from) {
-      await saveUser(ctx.from.id, ctx.from.username, ctx.from.first_name, ctx.from.last_name);
-    }
-    return next();
+    await handleMessage(msg);
   } catch (error) {
-    logger.error('Middleware error:', error);
-    return next();
+    logger.error('Error in message handler:', error);
+    await bot.sendMessage(msg.chat.id, '❌ An error occurred. Please try again later.');
   }
 });
 
-// Channel check middleware (except for start command and admin)
-bot.use(async (ctx, next) => {
-  // Skip channel check for start command
-  if (ctx.message?.text?.startsWith('/start')) {
-    return next();
-  }
-  
-  // Skip channel check for admin
-  if (ctx.from && ctx.from.id.toString() === process.env.ADMIN_ID) {
-    return next();
-  }
-  
-  // Skip for callback queries (they will be checked in the handler)
-  if (ctx.callbackQuery) {
-    return next();
-  }
-  
-  return channelCheck(ctx, next);
-});
-
-// Delete old message middleware
-bot.use(async (ctx, next) => {
-  if (ctx.chat && ctx.message) {
-    await deleteOldMessage(ctx);
-  }
-  return next();
-});
-
-// ============= REGISTER COMMANDS =============
-
-// Start command
-bot.start(async (ctx) => {
+// Callback query handler
+bot.on('callback_query', async (callbackQuery) => {
   try {
-    console.log("Start command received from user:", ctx.from.id);
-    if (startCommand && typeof startCommand.startCommand === 'function') {
-      await startCommand.startCommand(ctx);
-    } else {
-      console.error("startCommand.startCommand is not a function");
-      await ctx.reply("Welcome! Please try again later.");
-    }
+    await handleCallback(callbackQuery);
   } catch (error) {
-    console.error("Error in start command:", error);
-    await ctx.reply("An error occurred. Please try again.");
-  }
-});
-
-// Register admin commands
-if (adminCommands && typeof adminCommands.register === 'function') {
-  console.log("✅ Registering admin commands...");
-  adminCommands.register(bot);
-} else {
-  console.error("❌ ERROR: adminCommands.register is not a function!");
-  console.error("adminCommands =", adminCommands);
-}
-
-// Register user commands
-if (userCommands && typeof userCommands.register === 'function') {
-  console.log("✅ Registering user commands...");
-  userCommands.register(bot);
-} else {
-  console.error("❌ ERROR: userCommands.register is not a function!");
-  console.error("userCommands =", userCommands);
-}
-
-// ============= MESSAGE HANDLERS =============
-
-// Handle text messages
-bot.on('text', async (ctx) => {
-  try {
-    await messageHandler(ctx);
-  } catch (error) {
-    logger.error('Text handler error:', error);
-  }
-});
-
-// Handle callback queries
-bot.on('callback_query', async (ctx) => {
-  try {
-    await callbackHandler(ctx);
-  } catch (error) {
-    logger.error('Callback handler error:', error);
-  }
-});
-
-// Handle photo messages (for payment screenshots)
-bot.on('photo', async (ctx) => {
-  try {
-    await paymentHandler.handleScreenshot(ctx);
-  } catch (error) {
-    logger.error('Photo handler error:', error);
-  }
-});
-
-// Error handler
-bot.catch((err, ctx) => {
-  logger.error('Bot error:', err);
-  ctx.reply('An error occurred. Please try again later.').catch(e => {});
-});
-
-// ============= START BOT AND SERVER =============
-
-async function startBot() {
-  try {
-    // Initialize database
-    await initDatabase();
-    logger.info('✅ Database initialized successfully');
-    
-    // Launch bot
-    await bot.launch();
-    logger.info('✅ Bot started successfully');
-    
-    // Start express server
-    const PORT = process.env.PORT || 3000;
-    app.listen(PORT, () => {
-      logger.info(`✅ Server started on port ${PORT}`);
+    logger.error('Error in callback handler:', error);
+    await bot.answerCallbackQuery(callbackQuery.id, {
+      text: '❌ An error occurred',
+      show_alert: true
     });
-    
-    console.log("\n🎯 Bot is running successfully!");
-    console.log("================================");
-    
-  } catch (error) {
-    logger.error('❌ Failed to start bot:', error);
-    console.error("Startup error:", error);
-    process.exit(1);
   }
-}
-
-// Start everything
-startBot();
-
-// Graceful shutdown
-process.once('SIGINT', () => {
-  bot.stop('SIGINT');
-  pool.end();
-  console.log("Bot stopped");
 });
 
-process.once('SIGTERM', () => {
-  bot.stop('SIGTERM');
-  pool.end();
-  console.log("Bot stopped");
+// Payment handler (for photos/documents)
+bot.on('photo', async (msg) => {
+  try {
+    await handlePayment(msg);
+  } catch (error) {
+    logger.error('Error in payment handler:', error);
+    await bot.sendMessage(msg.chat.id, '❌ Error processing payment. Please try again.');
+  }
 });
 
-module.exports = { bot, pool };
+// Error handling
+bot.on('polling_error', (error) => {
+  logger.error('Polling error:', error);
+});
+
+// Start Express server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  logger.info(`Server started on port ${PORT}`);
+});
+
+logger.info('🤖 Shein Voucher Hub Bot is running...');
