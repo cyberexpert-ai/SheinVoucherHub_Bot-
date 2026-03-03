@@ -1,191 +1,115 @@
-const { Markup } = require('telegraf');
+const { getPool } = require('../../database/database');
+const logger = require('../../utils/logger');
+const { formatCurrency } = require('../../utils/helpers');
 
-async function handle(ctx) {
-  const action = ctx.callbackQuery.data;
-  
-  if (action === 'admin_category') {
-    await showCategoryMenu(ctx);
-  } else if (action.startsWith('admin_category_add')) {
-    await addCategory(ctx);
-  } else if (action.startsWith('admin_category_delete_')) {
-    const categoryId = action.replace('admin_category_delete_', '');
-    await deleteCategory(ctx, categoryId);
-  } else if (action.startsWith('admin_category_edit_')) {
-    const categoryId = action.replace('admin_category_edit_', '');
-    await editCategory(ctx, categoryId);
-  } else if (action.startsWith('admin_category_view_')) {
-    const categoryId = action.replace('admin_category_view_', '');
-    await viewCategory(ctx, categoryId);
-  }
-}
-
-async function showCategoryMenu(ctx) {
-  // Get all categories with stats
-  const categories = await global.pool.query(`
-    SELECT c.*, 
-           COUNT(v.id) FILTER (WHERE v.status = 'available') as available_stock,
-           COUNT(v.id) as total_stock
-    FROM categories c
-    LEFT JOIN vouchers v ON c.id = v.category_id
-    GROUP BY c.id
-    ORDER BY c.value ASC
-  `);
-
-  let message = "📊 *Category Management*\n\n";
-  
-  const buttons = [];
-  
-  for (const cat of categories.rows) {
-    message += `*${cat.name}*\n`;
-    message += `├ Available: ${cat.available_stock}\n`;
-    message += `├ Total: ${cat.total_stock}\n`;
-    message += `└ Status: ${cat.status}\n\n`;
+const showCategoryMenu = async (bot, chatId) => {
+    const pool = getPool();
+    
+    const categories = await pool.query(
+        'SELECT * FROM categories ORDER BY category_id'
+    );
+    
+    let message = '📊 Category Management\n\n';
+    message += 'Current Categories:\n\n';
+    
+    const buttons = [];
+    
+    categories.rows.forEach(cat => {
+        message += `ID: ${cat.category_id}\n`;
+        message += `Name: ${cat.name}\n`;
+        message += `Stock: ${cat.stock}\n`;
+        message += `Prices: 1:${formatCurrency(cat.price_1)} | 2:${formatCurrency(cat.price_2)} | 3:${formatCurrency(cat.price_3)}\n`;
+        message += `4:${formatCurrency(cat.price_4)} | 5:${formatCurrency(cat.price_5)} | Custom:${formatCurrency(cat.price_custom)}\n`;
+        message += '━━━━━━━━━━━━━━━━━━\n';
+        
+        buttons.push([
+            { text: `✏️ Edit ${cat.name}`, callback_data: `admin_editcat_${cat.category_id}` }
+        ]);
+    });
     
     buttons.push([
-      { text: `✏️ ${cat.name}`, callback_data: `admin_category_edit_${cat.id}` },
-      { text: `🗑 Delete`, callback_data: `admin_category_delete_${cat.id}` }
+        { text: '➕ Add Category', callback_data: 'admin_addcat' },
+        { text: '🗑 Delete Category', callback_data: 'admin_delcat' }
     ]);
-  }
-  
-  buttons.push(
-    [{ text: '➕ Add New Category', callback_data: 'admin_category_add' }],
-    [{ text: '🔙 Back to Admin', callback_data: 'admin_back' }]
-  );
+    buttons.push([{ text: '↩️ Back', callback_data: 'admin_back' }]);
+    
+    await bot.sendMessage(chatId, message, {
+        reply_markup: { inline_keyboard: buttons }
+    });
+};
 
-  await ctx.editMessageText(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons
-    }
-  });
-}
-
-async function addCategory(ctx) {
-  await ctx.reply(
-    "➕ *Add New Category*\n\n" +
-    "Send category details in format:\n" +
-    "`Name|Value|Description`\n\n" +
-    "Example: `₹5000|5000|Premium Vouchers`",
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        force_reply: true
-      }
-    }
-  );
-  
-  ctx.session = ctx.session || {};
-  ctx.session.adminAction = 'add_category';
-}
-
-async function deleteCategory(ctx, categoryId) {
-  // Check if category has any orders
-  const orders = await global.pool.query(
-    'SELECT COUNT(*) FROM orders WHERE category_id = $1',
-    [categoryId]
-  );
-
-  if (parseInt(orders.rows[0].count) > 0) {
-    return ctx.reply(
-      "❌ Cannot delete category with existing orders.\n" +
-      "Deactivate it instead."
+const addCategory = async (bot, chatId, userId) => {
+    const pool = getPool();
+    
+    await pool.query(
+        `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE 
+         SET temp_data = $2, updated_at = NOW()`,
+        [userId, { action: 'admin_addcat_name' }]
     );
-  }
+    
+    await bot.sendMessage(
+        chatId,
+        'Enter category name (e.g., ₹500):',
+        {
+            reply_markup: { force_reply: true }
+        }
+    );
+};
 
-  await global.pool.query(
-    'DELETE FROM categories WHERE id = $1',
-    [categoryId]
-  );
+const processAddCategory = async (bot, chatId, userId, text) => {
+    const pool = getPool();
+    
+    // Store name and ask for stock
+    await pool.query(
+        `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE 
+         SET temp_data = $2, updated_at = NOW()`,
+        [userId, { action: 'admin_addcat_stock', name: text }]
+    );
+    
+    await bot.sendMessage(
+        chatId,
+        'Enter initial stock quantity:',
+        {
+            reply_markup: { force_reply: true }
+        }
+    );
+};
 
-  await ctx.answerCbQuery('✅ Category deleted successfully!');
-  await showCategoryMenu(ctx);
-}
-
-async function editCategory(ctx, categoryId) {
-  const category = await global.pool.query(
-    'SELECT * FROM categories WHERE id = $1',
-    [categoryId]
-  );
-
-  if (category.rows.length === 0) {
-    return ctx.reply('Category not found.');
-  }
-
-  const cat = category.rows[0];
-
-  const message = 
-    `✏️ *Editing Category: ${cat.name}*\n\n` +
-    `Current Details:\n` +
-    `Name: ${cat.name}\n` +
-    `Value: ₹${cat.value}\n` +
-    `Description: ${cat.description || 'N/A'}\n` +
-    `Status: ${cat.status}\n\n` +
-    `What would you like to edit?`;
-
-  const buttons = [
-    [
-      { text: '📝 Name', callback_data: `admin_category_edit_name_${cat.id}` },
-      { text: '💰 Value', callback_data: `admin_category_edit_value_${cat.id}` }
-    ],
-    [
-      { text: '📄 Description', callback_data: `admin_category_edit_desc_${cat.id}` },
-      { text: '🔄 Status', callback_data: `admin_category_edit_status_${cat.id}` }
-    ],
-    [
-      { text: '📊 Price Tiers', callback_data: `admin_category_price_${cat.id}` }
-    ],
-    [{ text: '🔙 Back', callback_data: 'admin_category' }]
-  ];
-
-  await ctx.editMessageText(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons
+const processAddCategoryStock = async (bot, chatId, userId, text, session) => {
+    const stock = parseInt(text);
+    if (isNaN(stock) || stock < 0) {
+        await bot.sendMessage(chatId, '❌ Invalid stock value. Please enter a number.');
+        return;
     }
-  });
-}
+    
+    const pool = getPool();
+    
+    // Insert category with default prices
+    await pool.query(
+        `INSERT INTO categories (name, stock, price_1, price_2, price_3, price_4, price_5, price_custom)
+         VALUES ($1, $2, 0, 0, 0, 0, 0, 0)`,
+        [session.name, stock]
+    );
+    
+    await bot.sendMessage(chatId, '✅ Category added successfully!');
+    
+    // Clear session
+    await pool.query(
+        'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+        [userId]
+    );
+    
+    // Show category menu again
+    await showCategoryMenu(bot, chatId);
+};
 
-async function viewCategory(ctx, categoryId) {
-  const category = await global.pool.query(`
-    SELECT c.*, 
-           COUNT(v.id) FILTER (WHERE v.status = 'available') as available,
-           COUNT(v.id) FILTER (WHERE v.status = 'sold') as sold,
-           COUNT(v.id) as total
-    FROM categories c
-    LEFT JOIN vouchers v ON c.id = v.category_id
-    WHERE c.id = $1
-    GROUP BY c.id
-  `, [categoryId]);
-
-  if (category.rows.length === 0) {
-    return ctx.reply('Category not found.');
-  }
-
-  const cat = category.rows[0];
-  
-  const message = 
-    `📊 *Category Details*\n\n` +
-    `*Name:* ${cat.name}\n` +
-    `*Value:* ₹${cat.value}\n` +
-    `*Description:* ${cat.description || 'N/A'}\n` +
-    `*Status:* ${cat.status}\n` +
-    `*Available Stock:* ${cat.available}\n` +
-    `*Sold:* ${cat.sold}\n` +
-    `*Total Vouchers:* ${cat.total}\n`;
-
-  const buttons = [
-    [{ text: '✏️ Edit', callback_data: `admin_category_edit_${cat.id}` }],
-    [{ text: '🎟 View Vouchers', callback_data: `admin_voucher_category_${cat.id}` }],
-    [{ text: '💰 Price Tiers', callback_data: `admin_category_price_${cat.id}` }],
-    [{ text: '🔙 Back', callback_data: 'admin_category' }]
-  ];
-
-  await ctx.editMessageText(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons
-    }
-  });
-}
-
-module.exports = { handle };
+module.exports = {
+    showCategoryMenu,
+    addCategory,
+    processAddCategory,
+    processAddCategoryStock
+};
