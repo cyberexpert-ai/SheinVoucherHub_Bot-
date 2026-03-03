@@ -1,207 +1,148 @@
-const { Markup } = require('telegraf');
-const moment = require('moment');
+const { getPool } = require('../../database/database');
+const logger = require('../../utils/logger');
+const { MESSAGES, KEYBOARD } = require('../../utils/constants');
+const { isExpired } = require('../../utils/helpers');
 
-async function start(ctx) {
-  const message = 
-    "🔁 *Recover Vouchers*\n\n" +
-    "Send your Order ID to recover vouchers.\n\n" +
-    "📝 *Example:* `SVH-1234567890-ABC123`\n\n" +
-    "⚠️ *Note:* Recovery is only available within 2 hours of purchase.";
-
-  const buttons = [
-    [Markup.button.callback('🔙 Back', 'back_to_main')]
-  ];
-
-  await ctx.reply(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons,
-      force_reply: true
+const prompt = async (msg) => {
+    const bot = global.bot;
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+    
+    try {
+        const pool = getPool();
+        
+        // Set session state
+        await pool.query(
+            `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (user_id) DO UPDATE 
+             SET temp_data = $2, updated_at = NOW()`,
+            [userId, { action: 'awaiting_recovery' }]
+        );
+        
+        await bot.sendMessage(chatId, MESSAGES.RECOVERY_PROMPT, {
+            reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+        });
+        
+    } catch (error) {
+        logger.error('Error in recover prompt:', error);
+        await bot.sendMessage(chatId, '❌ Error. Please try again.');
     }
-  });
+};
 
-  // Set user state to expect order ID
-  ctx.session = ctx.session || {};
-  ctx.session.awaitingRecovery = true;
-}
+const process = async (msg) => {
+    const bot = global.bot;
+    const userId = msg.from.id;
+    const chatId = msg.chat.id;
+    const text = msg.text;
+    
+    try {
+        if (text === '↩️ Back') {
+            // Clear session and go back
+            const pool = getPool();
+            await pool.query(
+                'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+                [userId]
+            );
+            
+            const startCommand = require('../start');
+            await startCommand.showMainMenu(msg);
+            return;
+        }
+        
+        // Validate order ID format
+        if (!text.startsWith('SVH-')) {
+            await bot.sendMessage(chatId, '❌ Invalid Order ID format. Please use format: SVH-XXXXXXXX-XXXXXX');
+            return;
+        }
+        
+        const pool = getPool();
+        
+        // Check if order exists and belongs to user
+        const order = await pool.query(
+            `SELECT o.*, c.name as category_name 
+             FROM orders o
+             JOIN categories c ON o.category_id = c.category_id
+             WHERE o.order_id = $1`,
+            [text]
+        );
+        
+        if (order.rows.length === 0) {
+            await bot.sendMessage(chatId, MESSAGES.ORDER_NOT_FOUND(text), {
+                reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+            });
+            return;
+        }
+        
+        const ord = order.rows[0];
+        
+        // Check if order belongs to this user
+        if (ord.user_id !== userId) {
+            await bot.sendMessage(chatId, MESSAGES.WRONG_ACCOUNT, {
+                reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+            });
+            return;
+        }
+        
+        // Check if order is expired
+        if (ord.status === 'successful' && ord.recovered) {
+            await bot.sendMessage(chatId, '❌ This order has already been recovered.');
+            return;
+        }
+        
+        if (isExpired(ord.created_at, 2)) {
+            await bot.sendMessage(chatId, MESSAGES.ORDER_EXPIRED(text), {
+                reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+            });
+            return;
+        }
+        
+        // Forward to admin
+        const adminMessage = `🔄 Recovery Request
 
-async function processRecovery(ctx, orderId) {
-  try {
-    const userId = ctx.from.id;
+User ID: ${userId}
+Order ID: ${text}
+Category: ${ord.category_name}
+Quantity: ${ord.quantity}
+Original Status: ${ord.status}
 
-    // Validate order ID format
-    const orderIdRegex = /^SVH-\d{8}-[A-Z0-9]{6}$/;
-    if (!orderIdRegex.test(orderId)) {
-      return ctx.reply(
-        "❌ *Invalid Order ID Format*\n\n" +
-        "Please use format: `SVH-YYYYMMDD-XXXXXX`\n" +
-        "Example: `SVH-20260130-54C98D`",
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
+Please handle this recovery request:`;
+
+        const adminButtons = {
             inline_keyboard: [
-              [Markup.button.callback('🔁 Try Again', 'recover_vouchers')],
-              [Markup.button.callback('🔙 Back', 'back_to_main')]
+                [
+                    { text: '✅ Send New Code', callback_data: `admin_recovery_send_${text}` },
+                    { text: '❌ Reject', callback_data: `admin_recovery_reject_${text}` }
+                ]
             ]
-          }
-        }
-      );
+        };
+        
+        await bot.sendMessage(process.env.ADMIN_ID, adminMessage, {
+            reply_markup: adminButtons
+        });
+        
+        // Update order recovery status
+        await pool.query(
+            `UPDATE orders SET recovered = true, recovery_expires = NOW() + INTERVAL '2 hours' 
+             WHERE order_id = $1`,
+            [text]
+        );
+        
+        await bot.sendMessage(
+            chatId,
+            `✅ Recovery request sent for order ${text}.\n\nYou will be notified once processed.`,
+            {
+                reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+            }
+        );
+        
+    } catch (error) {
+        logger.error('Error processing recovery:', error);
+        await bot.sendMessage(chatId, '❌ Error processing recovery request.');
     }
+};
 
-    // Check if order exists and belongs to user
-    const order = await global.pool.query(`
-      SELECT o.*, c.name as category_name,
-             array_agg(v.code) as voucher_codes
-      FROM orders o
-      LEFT JOIN categories c ON o.category_id = c.id
-      LEFT JOIN order_vouchers ov ON o.order_id = ov.order_id
-      LEFT JOIN vouchers v ON ov.voucher_id = v.id
-      WHERE o.order_id = $1
-      GROUP BY o.id, o.order_id, c.name
-    `, [orderId]);
-
-    if (order.rows.length === 0) {
-      return ctx.reply(
-        `⚠️ *Order not found:* \`${orderId}\`\n\n` +
-        "Please check your Order ID and try again.",
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [Markup.button.callback('🔁 Try Again', 'recover_vouchers')],
-              [Markup.button.callback('🔙 Back', 'back_to_main')]
-            ]
-          }
-        }
-      );
-    }
-
-    const orderData = order.rows[0];
-
-    // Check if order belongs to this user
-    if (orderData.user_id.toString() !== userId.toString()) {
-      return ctx.reply(
-        "⚠️ *This Order ID belongs to another account.*\n\n" +
-        "Recovery is only available for the original purchaser.",
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [Markup.button.callback('🔁 Try Again', 'recover_vouchers')],
-              [Markup.button.callback('🔙 Back', 'back_to_main')]
-            ]
-          }
-        }
-      );
-    }
-
-    // Check if recovery is still available (within 2 hours)
-    const orderTime = moment(orderData.created_at);
-    const now = moment();
-    const hoursDiff = now.diff(orderTime, 'hours');
-
-    if (hoursDiff > 2) {
-      return ctx.reply(
-        "⏰ *Recovery Period Expired*\n\n" +
-        "Orders can only be recovered within 2 hours of purchase.\n" +
-        "Please contact support for assistance.",
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [Markup.button.callback('🆘 Contact Support', 'support')],
-              [Markup.button.callback('🔙 Back', 'back_to_main')]
-            ]
-          }
-        }
-      );
-    }
-
-    // Check if order is completed and has vouchers
-    if (orderData.status === 'completed' && orderData.voucher_codes && orderData.voucher_codes[0]) {
-      const vouchers = orderData.voucher_codes.filter(v => v !== null);
-      
-      let voucherMessage = 
-        "✅ *Order Found - Recovery Successful*\n\n" +
-        `📦 *Order ID:* \`${orderData.order_id}\`\n` +
-        `🎟 *Category:* ${orderData.category_name}\n` +
-        `🔢 *Quantity:* ${orderData.quantity}\n` +
-        `💰 *Amount:* ₹${orderData.total_amount}\n\n` +
-        "🔑 *Your Voucher Codes:*\n\n";
-
-      vouchers.forEach((voucher, index) => {
-        voucherMessage += `${index + 1}. \`${voucher}\`\n`;
-      });
-
-      voucherMessage += "\n📋 Tap on code to copy";
-
-      await ctx.reply(voucherMessage, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [Markup.button.callback('📦 View Orders', 'my_orders')],
-            [Markup.button.callback('🔙 Back', 'back_to_main')]
-          ]
-        }
-      });
-
-      // Log recovery activity
-      await global.pool.query(
-        `INSERT INTO activity_logs (user_id, action, details) 
-         VALUES ($1, $2, $3)`,
-        [userId, 'recovery_success', { order_id: orderId }]
-      );
-
-    } else {
-      // Order exists but not completed - forward to admin
-      await forwardToAdmin(ctx, orderData);
-    }
-
-  } catch (error) {
-    console.error('Recovery error:', error);
-    ctx.reply('An error occurred. Please try again later.');
-  }
-}
-
-async function forwardToAdmin(ctx, orderData) {
-  const adminId = process.env.ADMIN_ID;
-  
-  const message = 
-    "🔄 *Recovery Request*\n\n" +
-    `👤 *User:* ${ctx.from.first_name} ${ctx.from.last_name || ''}\n` +
-    `🆔 *User ID:* \`${ctx.from.id}\`\n` +
-    `🧾 *Order ID:* \`${orderData.order_id}\`\n` +
-    `📦 *Category:* ${orderData.category_name}\n` +
-    `🔢 *Quantity:* ${orderData.quantity}\n` +
-    `💰 *Amount:* ₹${orderData.total_amount}\n` +
-    `📅 *Order Date:* ${moment(orderData.created_at).format('DD/MM/YYYY HH:mm')}\n` +
-    `📊 *Current Status:* ${orderData.status}\n\n` +
-    "Please process this recovery request:";
-
-  await ctx.telegram.sendMessage(adminId, message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [
-        [
-          Markup.button.callback(`✅ Accept Recovery`, `admin_recovery_accept_${orderData.order_id}`),
-          Markup.button.callback(`❌ Reject Recovery`, `admin_recovery_reject_${orderData.order_id}`)
-        ]
-      ]
-    }
-  });
-
-  await ctx.reply(
-    "✅ *Recovery request sent to admin*\n\n" +
-    "Our team will process your request shortly. You'll be notified once resolved.",
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [Markup.button.callback('🔙 Back', 'back_to_main')]
-        ]
-      }
-    }
-  );
-}
-
-module.exports = { start, processRecovery };
+module.exports = {
+    prompt,
+    process
+};
