@@ -1,81 +1,110 @@
-// src/commands/start.js
-const { Markup } = require('telegraf');
-const { checkMembership } = require('../middlewares/channelCheck');
-const { deleteOldMessage, saveUser } = require('../utils/helpers');
+const { getPool } = require('../database/database');
+const { checkChannelJoin } = require('../middlewares/auth');
+const { MESSAGES, KEYBOARD } = require('../utils/constants');
+const logger = require('../utils/logger');
 
-async function startCommand(ctx) {
-  try {
-    const userId = ctx.from.id;
-    const username = ctx.from.username;
-    const firstName = ctx.from.first_name;
-    const lastName = ctx.from.last_name;
-
-    await saveUser(userId, username, firstName, lastName);
-
-    const isMember = await checkMembership(ctx);
+const execute = async (msg) => {
+    const bot = global.bot;
+    const userId = msg.from.id;
+    const chatId = msg.chat.id;
+    const username = msg.from.username;
+    const firstName = msg.from.first_name;
+    const lastName = msg.from.last_name;
     
-    if (!isMember) {
-      const joinButtons = [];
-      
-      if (process.env.CHANNEL_1) {
-        joinButtons.push([Markup.button.url('📢 Join Channel 1', `https://t.me/${process.env.CHANNEL_1.replace('@', '')}`)]);
-      }
-      if (process.env.CHANNEL_2) {
-        joinButtons.push([Markup.button.url('📢 Join Channel 2', `https://t.me/${process.env.CHANNEL_2.replace('@', '')}`)]);
-      }
-      
-      joinButtons.push([Markup.button.callback('✅ Verify Join', 'verify_join')]);
-
-      await ctx.reply(
-        "👋 *Welcome to Shein Codes Bot*\n\n" +
-        "📢 Please join our channels to continue:",
-        {
-          parse_mode: "Markdown",
-          reply_markup: {
-            inline_keyboard: joinButtons
-          }
+    try {
+        // Save or update user
+        const pool = getPool();
+        await pool.query(
+            `INSERT INTO users (user_id, username, first_name, last_name, joined_at, last_active)
+             VALUES ($1, $2, $3, $4, NOW(), NOW())
+             ON CONFLICT (user_id) DO UPDATE 
+             SET username = $2, first_name = $3, last_name = $4, last_active = NOW()`,
+            [userId, username, firstName, lastName]
+        );
+        
+        // Delete previous messages
+        const session = await pool.query(
+            'SELECT last_message_id FROM user_sessions WHERE user_id = $1',
+            [userId]
+        );
+        
+        if (session.rows.length > 0 && session.rows[0].last_message_id) {
+            try {
+                await bot.deleteMessage(chatId, session.rows[0].last_message_id);
+            } catch (e) {
+                // Message might be too old
+            }
         }
-      );
-      return;
+        
+        // Check if user joined channels
+        const isJoined = await checkChannelJoin(bot, userId);
+        
+        if (!isJoined) {
+            const joinKeyboard = {
+                inline_keyboard: [
+                    [{ text: '📢 Official channel', url: 'https://t.me/SheinVoucherHub' }],
+                    [{ text: '📢 Order alert', url: 'https://t.me/OrdersNotify' }],
+                    [{ text: '✅ Verify', callback_data: 'verify_join' }]
+                ]
+            };
+            
+            const joinMessage = await bot.sendMessage(chatId, MESSAGES.JOIN_REQUIRED, {
+                reply_markup: joinKeyboard,
+                parse_mode: 'HTML'
+            });
+            
+            await pool.query(
+                `INSERT INTO user_sessions (user_id, last_message_id, updated_at)
+                 VALUES ($1, $2, NOW())
+                 ON CONFLICT (user_id) DO UPDATE 
+                 SET last_message_id = $2, updated_at = NOW()`,
+                [userId, joinMessage.message_id]
+            );
+        } else {
+            await showMainMenu(msg);
+        }
+        
+    } catch (error) {
+        logger.error('Error in start command:', error);
+        await bot.sendMessage(chatId, '❌ An error occurred. Please try again later.');
     }
+};
 
-    await showMainMenu(ctx);
+const showMainMenu = async (msg) => {
+    const bot = global.bot;
+    const userId = msg.from.id;
+    const chatId = msg.chat.id;
     
-  } catch (error) {
-    console.error('Start command error:', error);
-    ctx.reply('An error occurred. Please try again later.');
-  }
-}
+    try {
+        const welcomeMessage = await bot.sendMessage(
+            chatId,
+            MESSAGES.WELCOME,
+            {
+                reply_markup: {
+                    keyboard: [
+                        ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
+                        ['📦 My Orders', '📜 Disclaimer'],
+                        ['🆘 Support']
+                    ],
+                    resize_keyboard: true
+                }
+            }
+        );
+        
+        const pool = getPool();
+        await pool.query(
+            `INSERT INTO user_sessions (user_id, last_message_id, updated_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (user_id) DO UPDATE 
+             SET last_message_id = $2, updated_at = NOW()`,
+            [userId, welcomeMessage.message_id]
+        );
+    } catch (error) {
+        logger.error('Error showing main menu:', error);
+    }
+};
 
-async function showMainMenu(ctx) {
-  const message = 
-    "🎯 *Welcome to Shein Voucher Hub!*\n\n" +
-    "🚀 Get exclusive Shein vouchers at the best prices!\n\n" +
-    "📌 *Choose an option below:*";
-
-  const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback('🛒 Buy Voucher', 'buy_voucher')],
-    [Markup.button.callback('🔁 Recover Vouchers', 'recover_vouchers')],
-    [Markup.button.callback('📦 My Orders', 'my_orders')],
-    [Markup.button.callback('📜 Disclaimer', 'disclaimer')],
-    [Markup.button.callback('🆘 Support', 'support')]
-  ]);
-
-  await ctx.reply(message, {
-    parse_mode: "Markdown",
-    reply_markup: keyboard.reply_markup
-  });
-}
-
-async function handleVerifyJoin(ctx) {
-  const isMember = await checkMembership(ctx);
-  
-  if (isMember) {
-    await deleteOldMessage(ctx);
-    await showMainMenu(ctx);
-  } else {
-    await ctx.answerCbQuery('❌ You have not joined both channels yet!', { show_alert: true });
-  }
-}
-
-module.exports = { startCommand, showMainMenu, handleVerifyJoin };
+module.exports = {
+    execute,
+    showMainMenu
+};
