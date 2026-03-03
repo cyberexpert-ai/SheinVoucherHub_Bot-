@@ -1,120 +1,128 @@
-const { Markup } = require('telegraf');
-const { v4: uuidv4 } = require('uuid');
+const { getPool } = require('../../database/database');
+const logger = require('../../utils/logger');
+const { MESSAGES, KEYBOARD } = require('../../utils/constants');
 
-async function start(ctx) {
-  const message = 
-    "🆘 *Support Center*\n\n" +
-    "How can we help you today?\n\n" +
-    "• Voucher issues\n" +
-    "• Payment problems\n" +
-    "• Recovery assistance\n" +
-    "• General inquiries\n\n" +
-    "Please describe your issue in detail.";
-
-  const buttons = [
-    [Markup.button.callback('↩️ Leave', 'leave_support')]
-  ];
-
-  await ctx.reply(message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: buttons,
-      force_reply: true
-    }
-  });
-
-  // Set user state to expect support message
-  ctx.session = ctx.session || {};
-  ctx.session.awaitingSupport = true;
-}
-
-async function handleSupportMessage(ctx, messageText, photo) {
-  try {
-    const userId = ctx.from.id;
-    const username = ctx.from.username || 'No username';
-    const firstName = ctx.from.first_name;
+const start = async (msg) => {
+    const bot = global.bot;
+    const userId = msg.from.id;
+    const chatId = msg.chat.id;
     
-    // Generate ticket ID
-    const ticketId = `TKT-${uuidv4().slice(0, 8).toUpperCase()}`;
-
-    // Save ticket to database
-    const ticket = await global.pool.query(
-      `INSERT INTO support_tickets (ticket_id, user_id, message, photo, status)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-      [ticketId, userId, messageText, photo || null, 'open']
-    );
-
-    // Forward to admin
-    const adminMessage = 
-      "🎫 *New Support Ticket*\n\n" +
-      `🆔 *Ticket ID:* \`${ticketId}\`\n` +
-      `👤 *User:* ${firstName} (@${username})\n` +
-      `🆔 *User ID:* \`${userId}\`\n` +
-      `📝 *Message:*\n${messageText}\n\n` +
-      `📅 *Time:* ${new Date().toLocaleString()}`;
-
-    const adminId = process.env.ADMIN_ID;
-
-    if (photo) {
-      await ctx.telegram.sendPhoto(adminId, photo, {
-        caption: adminMessage,
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [
-              Markup.button.callback(`✅ Mark Resolved`, `admin_ticket_resolve_${ticketId}`),
-              Markup.button.callback(`⛔ Block User`, `admin_ticket_block_${userId}`)
-            ],
-            [
-              Markup.button.callback(`💬 Reply`, `admin_ticket_reply_${ticketId}`)
-            ]
-          ]
-        }
-      });
-    } else {
-      await ctx.telegram.sendMessage(adminId, adminMessage, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [
-              Markup.button.callback(`✅ Mark Resolved`, `admin_ticket_resolve_${ticketId}`),
-              Markup.button.callback(`⛔ Block User`, `admin_ticket_block_${userId}`)
-            ],
-            [
-              Markup.button.callback(`💬 Reply`, `admin_ticket_reply_${ticketId}`)
-            ]
-          ]
-        }
-      });
+    try {
+        const pool = getPool();
+        
+        // Set session state
+        await pool.query(
+            `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (user_id) DO UPDATE 
+             SET temp_data = $2, updated_at = NOW()`,
+            [userId, { action: 'awaiting_support' }]
+        );
+        
+        await bot.sendMessage(
+            chatId,
+            '🆘 Support\n\nPlease describe your issue. Our team will respond shortly.\n\n⚠️ Fake or abusive messages may result in a ban.',
+            {
+                reply_markup: { keyboard: KEYBOARD.LEAVE, resize_keyboard: true }
+            }
+        );
+        
+    } catch (error) {
+        logger.error('Error in support start:', error);
+        await bot.sendMessage(chatId, '❌ Error. Please try again.');
     }
+};
 
-    // Confirm to user
-    await ctx.reply(
-      "✅ *Support Request Sent*\n\n" +
-      `Your ticket ID: \`${ticketId}\`\n\n` +
-      "Our support team will respond shortly. Please be patient.\n\n" +
-      "⚠️ *Warning:* Fake or timepass messages may result in account restrictions.",
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [Markup.button.callback('🔙 Back', 'back_to_main')]
-          ]
+const process = async (msg) => {
+    const bot = global.bot;
+    const userId = msg.from.id;
+    const chatId = msg.chat.id;
+    const text = msg.text;
+    const username = msg.from.username || 'No username';
+    const firstName = msg.from.first_name || 'User';
+    
+    try {
+        if (text === '↩️ Leave') {
+            // Clear session and go back
+            const pool = getPool();
+            await pool.query(
+                'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+                [userId]
+            );
+            
+            const startCommand = require('../start');
+            await startCommand.showMainMenu(msg);
+            return;
         }
-      }
-    );
+        
+        // Check for abuse
+        const abusiveWords = ['fake', 'scam', 'abuse', 'illegal', 'hack', 'cheat'];
+        const isAbusive = abusiveWords.some(word => text.toLowerCase().includes(word));
+        
+        if (isAbusive) {
+            // Temp block for abuse
+            const pool = getPool();
+            await pool.query(
+                `UPDATE users 
+                 SET is_blocked = true, block_reason = 'Abusive language in support', 
+                     block_expires = NOW() + INTERVAL '30 minutes'
+                 WHERE user_id = $1`,
+                [userId]
+            );
+            
+            await bot.sendMessage(
+                chatId,
+                '⏳ You have been temporarily restricted for 30 minutes due to inappropriate language.'
+            );
+            return;
+        }
+        
+        // Forward to admin
+        const supportMessage = `🆘 New Support Message
 
-    // Log support activity
-    await global.pool.query(
-      `INSERT INTO activity_logs (user_id, action, details) 
-       VALUES ($1, $2, $3)`,
-      [userId, 'support_ticket_created', { ticket_id: ticketId }]
-    );
+From: ${firstName} (@${username})
+User ID: ${userId}
+Time: ${new Date().toLocaleString()}
 
-  } catch (error) {
-    console.error('Support message error:', error);
-    ctx.reply('An error occurred. Please try again later.');
-  }
-}
+Message:
+${text}`;
 
-module.exports = { start, handleSupportMessage };
+        const supportButtons = {
+            inline_keyboard: [
+                [
+                    { text: '✏️ Reply', callback_data: `admin_reply_${userId}` },
+                    { text: '🚫 Block', callback_data: `admin_block_${userId}` }
+                ]
+            ]
+        };
+        
+        await bot.sendMessage(process.env.ADMIN_ID, supportMessage, {
+            reply_markup: supportButtons
+        });
+        
+        // Save to database
+        const pool = getPool();
+        await pool.query(
+            `INSERT INTO support_tickets (user_id, message, status)
+             VALUES ($1, $2, 'open')`,
+            [userId, text]
+        );
+        
+        await bot.sendMessage(
+            chatId,
+            '✅ Your message has been sent to support. You will receive a reply soon.',
+            {
+                reply_markup: { keyboard: KEYBOARD.LEAVE, resize_keyboard: true }
+            }
+        );
+        
+    } catch (error) {
+        logger.error('Error processing support message:', error);
+        await bot.sendMessage(chatId, '❌ Error sending message. Please try again.');
+    }
+};
+
+module.exports = {
+    start,
+    process
+};
