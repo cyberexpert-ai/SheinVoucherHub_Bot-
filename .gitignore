@@ -1,9 +1,5 @@
 node_modules/
 .env
+logs/
 *.log
 .DS_Store
-dist/
-build/
-*.pid
-npm-debug.log
-yarn-error.log
