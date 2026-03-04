@@ -1,6 +1,5 @@
 const { getPool } = require('../../database/database');
 const logger = require('../../utils/logger');
-const { MESSAGES, KEYBOARD } = require('../../utils/constants');
 
 const start = async (msg) => {
     const bot = global.bot;
@@ -8,7 +7,15 @@ const start = async (msg) => {
     const chatId = msg.chat.id;
     
     try {
+        logger.info(`Support started for user ${userId}`);
+        
         const pool = getPool();
+        
+        // Clear any existing session
+        await pool.query(
+            'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+            [userId]
+        );
         
         // Set session state
         await pool.query(
@@ -21,16 +28,18 @@ const start = async (msg) => {
         
         await bot.sendMessage(
             chatId,
-            '🆘 *Support*\n\nPlease describe your issue. Our team will respond shortly.\n\n⚠️ Fake or abusive messages may result in a ban.',
+            '🆘 *Support*\n\nPlease describe your issue below. Our team will respond shortly.\n\n⚠️ *Warning:* Fake or abusive messages may result in a permanent ban.',
             {
                 parse_mode: 'Markdown',
-                reply_markup: { keyboard: [['↩️ Leave']], resize_keyboard: true }
+                reply_markup: { keyboard: [['↩️ Back to Menu']], resize_keyboard: true }
             }
         );
         
     } catch (error) {
         logger.error('Error in support start:', error);
-        await bot.sendMessage(chatId, '❌ Error. Please try again.');
+        await bot.sendMessage(chatId, '❌ Error. Please try again.', {
+            reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+        });
     }
 };
 
@@ -43,7 +52,9 @@ const process = async (msg) => {
     const firstName = msg.from.first_name || 'User';
     
     try {
-        if (text === '↩️ Leave') {
+        logger.info(`Processing support message from user ${userId}: ${text}`);
+        
+        if (text === '↩️ Back to Menu') {
             // Clear session and go back
             const pool = getPool();
             await pool.query(
@@ -57,7 +68,7 @@ const process = async (msg) => {
         }
         
         // Check for abuse
-        const abusiveWords = ['fake', 'scam', 'abuse', 'illegal', 'hack', 'cheat', 'fuck', 'shit'];
+        const abusiveWords = ['fake', 'scam', 'abuse', 'illegal', 'hack', 'cheat', 'fuck', 'shit', 'bitch', 'asshole'];
         const isAbusive = abusiveWords.some(word => text.toLowerCase().includes(word));
         
         if (isAbusive) {
@@ -106,10 +117,10 @@ const process = async (msg) => {
             inline_keyboard: [
                 [
                     { text: '✏️ Reply', callback_data: `admin_reply_${userId}_${ticket.rows[0].ticket_id}` },
-                    { text: '🚫 Block', callback_data: `admin_block_${userId}` }
+                    { text: '🚫 Block User', callback_data: `admin_block_${userId}` }
                 ],
                 [
-                    { text: '✅ Resolve', callback_data: `admin_resolve_${ticket.rows[0].ticket_id}` }
+                    { text: '✅ Mark Resolved', callback_data: `admin_resolve_${ticket.rows[0].ticket_id}` }
                 ]
             ]
         };
@@ -131,11 +142,7 @@ const process = async (msg) => {
             {
                 parse_mode: 'Markdown',
                 reply_markup: {
-                    keyboard: [
-                        ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
-                        ['📦 My Orders', '📜 Disclaimer'],
-                        ['🆘 Support']
-                    ],
+                    keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']],
                     resize_keyboard: true
                 }
             }
@@ -145,17 +152,20 @@ const process = async (msg) => {
         logger.error('Error processing support message:', error);
         await bot.sendMessage(
             chatId, 
-            '❌ Error sending message. Please try again later.',
+            '❌ Error sending message. Please try again later or contact @SheinSupportRobot directly.',
             {
                 reply_markup: {
-                    keyboard: [
-                        ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
-                        ['📦 My Orders', '📜 Disclaimer'],
-                        ['🆘 Support']
-                    ],
+                    keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']],
                     resize_keyboard: true
                 }
             }
+        );
+        
+        // Clear session on error
+        const pool = getPool();
+        await pool.query(
+            'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+            [userId]
         );
     }
 };
