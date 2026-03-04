@@ -5,7 +5,8 @@ const show = async (msg) => {
     const chatId = msg.chat.id;
     
     await bot.sendMessage(chatId, MESSAGES.DISCLAIMER, {
-        reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+        parse_mode: 'Markdown',
+        reply_markup: { keyboard: KEYBOARD.MAIN, resize_keyboard: true }
     });
 };
 
