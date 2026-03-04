@@ -27,20 +27,28 @@ const showAdminPanel = async (msg) => {
             FROM orders
         `);
         
-        const stats = orderStats.rows[0];
+        const categoryStats = await pool.query(`
+            SELECT 
+                COUNT(*) as total_categories,
+                SUM(stock) as total_stock
+            FROM categories WHERE is_active = true
+        `);
         
-        const adminMessage = `👑 Admin Panel
-
-📊 Quick Stats
-━━━━━━━━━━━━━━━━━━
-👥 Total Users: ${userCount.rows[0].count}
-📦 Total Orders: ${stats.total_orders || 0}
-⏳ Pending: ${stats.pending || 0}
-✅ Successful: ${stats.successful || 0}
-💰 Revenue: ${formatCurrency(stats.revenue || 0)}
-
-━━━━━━━━━━━━━━━━━━
-Select an option below:`;
+        const stats = orderStats.rows[0];
+        const catStats = categoryStats.rows[0];
+        
+        const adminMessage = `👑 *Admin Panel*\n\n` +
+            `📊 *Quick Stats*\n` +
+            `━━━━━━━━━━━━━━━━━━\n` +
+            `👥 *Total Users:* ${userCount.rows[0].count}\n` +
+            `📦 *Total Orders:* ${stats.total_orders || 0}\n` +
+            `⏳ *Pending:* ${stats.pending || 0}\n` +
+            `✅ *Successful:* ${stats.successful || 0}\n` +
+            `💰 *Revenue:* ${formatCurrency(stats.revenue || 0)}\n` +
+            `📊 *Categories:* ${catStats.total_categories || 0}\n` +
+            `🎫 *Total Stock:* ${catStats.total_stock || 0}\n\n` +
+            `━━━━━━━━━━━━━━━━━━\n` +
+            `Select an option below:`;
 
         const adminKeyboard = {
             inline_keyboard: [
@@ -57,12 +65,26 @@ Select an option below:`;
         };
         
         await bot.sendMessage(chatId, adminMessage, {
+            parse_mode: 'Markdown',
             reply_markup: adminKeyboard
         });
         
     } catch (error) {
         logger.error('Error in admin panel:', error);
-        await bot.sendMessage(chatId, '❌ Error loading admin panel.');
+        await bot.sendMessage(
+            chatId, 
+            '❌ Error loading admin panel. Please check logs.',
+            {
+                reply_markup: {
+                    keyboard: [
+                        ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
+                        ['📦 My Orders', '📜 Disclaimer'],
+                        ['🆘 Support']
+                    ],
+                    resize_keyboard: true
+                }
+            }
+        );
     }
 };
 
