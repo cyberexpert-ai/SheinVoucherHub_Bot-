@@ -12,6 +12,8 @@ const execute = async (msg) => {
     const lastName = msg.from.last_name;
     
     try {
+        logger.info(`Start command from user ${userId}`);
+        
         // Save or update user
         const pool = getPool();
         await pool.query(
@@ -36,14 +38,20 @@ const execute = async (msg) => {
             }
         }
         
+        // Clear any existing session data
+        await pool.query(
+            'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+            [userId]
+        );
+        
         // Check if user joined channels
         const isJoined = await checkChannelJoin(bot, userId);
         
         if (!isJoined) {
             const joinKeyboard = {
                 inline_keyboard: [
-                    [{ text: '📢 Official channel', url: 'https://t.me/SheinVoucherHub' }],
-                    [{ text: '📢 Order alert', url: 'https://t.me/OrdersNotify' }],
+                    [{ text: '📢 Join Channel 1', url: 'https://t.me/SheinVoucherHub' }],
+                    [{ text: '📢 Join Channel 2', url: 'https://t.me/OrdersNotify' }],
                     [{ text: '✅ Verify', callback_data: 'verify_join' }]
                 ]
             };
@@ -76,22 +84,26 @@ const showMainMenu = async (msg) => {
     const chatId = msg.chat.id;
     
     try {
+        logger.info(`Showing main menu for user ${userId}`);
+        
+        // Clear any existing session data
+        const pool = getPool();
+        await pool.query(
+            'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+            [userId]
+        );
+        
         const welcomeMessage = await bot.sendMessage(
             chatId,
             MESSAGES.WELCOME,
             {
                 reply_markup: {
-                    keyboard: [
-                        ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
-                        ['📦 My Orders', '📜 Disclaimer'],
-                        ['🆘 Support']
-                    ],
+                    keyboard: KEYBOARD.MAIN,
                     resize_keyboard: true
                 }
             }
         );
         
-        const pool = getPool();
         await pool.query(
             `INSERT INTO user_sessions (user_id, last_message_id, updated_at)
              VALUES ($1, $2, NOW())
@@ -99,6 +111,7 @@ const showMainMenu = async (msg) => {
              SET last_message_id = $2, updated_at = NOW()`,
             [userId, welcomeMessage.message_id]
         );
+        
     } catch (error) {
         logger.error('Error showing main menu:', error);
     }
