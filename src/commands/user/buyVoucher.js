@@ -1,9 +1,9 @@
 const { getPool } = require('../../database/database');
 const logger = require('../../utils/logger');
 const { generateOrderId, formatCurrency, isValidUTR } = require('../../utils/helpers');
-const { PAYMENT_QR, MESSAGES, CHANNELS } = require('../../utils/constants');
+const { PAYMENT_QR, CHANNELS } = require('../../utils/constants');
 
-// Store user states to prevent multiple category displays
+// Store user states to prevent multiple displays
 const userStates = new Map();
 
 const showCategories = async (msg) => {
@@ -13,7 +13,7 @@ const showCategories = async (msg) => {
     
     try {
         // Check if user already viewing categories
-        if (userStates.has(userId) && userStates.get(userId) === 'viewing_categories') {
+        if (userStates.has(userId)) {
             return;
         }
         
@@ -23,31 +23,33 @@ const showCategories = async (msg) => {
         
         // Get active categories with stock
         const categories = await pool.query(
-            'SELECT category_id, name, stock FROM categories WHERE is_active = true AND stock > 0 ORDER BY category_id'
+            'SELECT category_id, name, stock FROM categories WHERE is_active = true ORDER BY category_id'
         );
         
         if (categories.rows.length === 0) {
-            await bot.sendMessage(chatId, '❌ No vouchers available at the moment.', {
-                reply_markup: { keyboard: [['↩️ Back']], resize_keyboard: true }
+            await bot.sendMessage(chatId, '❌ No categories available.', {
+                reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
             });
             userStates.delete(userId);
             return;
         }
         
-        // Create category buttons - fix: show only once
+        // Create category buttons
         const buttons = [];
         categories.rows.forEach(cat => {
+            const stockStatus = cat.stock > 0 ? `(Stock: ${cat.stock})` : '(Out of Stock)';
             buttons.push([
-                { text: `${cat.name} (Stock: ${cat.stock})`, callback_data: `category_${cat.category_id}` }
+                { text: `${cat.name} ${stockStatus}`, callback_data: `category_${cat.category_id}` }
             ]);
         });
         
-        buttons.push([{ text: '↩️ Back', callback_data: 'back_main' }]);
+        buttons.push([{ text: '↩️ Back to Main Menu', callback_data: 'back_main' }]);
         
         await bot.sendMessage(
             chatId,
-            '🛒 Select voucher category:',
+            '🛒 *Select Voucher Category:*\n\nClick on a category to see details and prices.',
             {
+                parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: buttons }
             }
         );
@@ -59,7 +61,9 @@ const showCategories = async (msg) => {
         
     } catch (error) {
         logger.error('Error showing categories:', error);
-        await bot.sendMessage(chatId, '❌ Error loading categories. Please try again.');
+        await bot.sendMessage(chatId, '❌ Error loading categories. Please try again.', {
+            reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+        });
         userStates.delete(userId);
     }
 };
@@ -86,7 +90,9 @@ const selectCategory = async (bot, user, message, categoryId) => {
         );
         
         if (category.rows.length === 0) {
-            await bot.sendMessage(chatId, '❌ Category not found.');
+            await bot.sendMessage(chatId, '❌ Category not found.', {
+                reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+            });
             userStates.delete(userId);
             return;
         }
@@ -102,24 +108,35 @@ const selectCategory = async (bot, user, message, categoryId) => {
             [userId, { action: 'selecting_quantity', categoryId: cat.category_id, categoryName: cat.name }]
         );
         
-        // Show quantity selection
+        // Show quantity selection with prices
         const quantityButtons = [
             [
-                { text: '1️⃣ 1', callback_data: `qty_1_${cat.category_id}` },
-                { text: '2️⃣ 2', callback_data: `qty_2_${cat.category_id}` },
-                { text: '3️⃣ 3', callback_data: `qty_3_${cat.category_id}` }
+                { text: `1️⃣ 1x (${formatCurrency(cat.price_1)})`, callback_data: `qty_1_${cat.category_id}` },
+                { text: `2️⃣ 2x (${formatCurrency(cat.price_2)})`, callback_data: `qty_2_${cat.category_id}` },
+                { text: `3️⃣ 3x (${formatCurrency(cat.price_3)})`, callback_data: `qty_3_${cat.category_id}` }
             ],
             [
-                { text: '4️⃣ 4', callback_data: `qty_4_${cat.category_id}` },
-                { text: '5️⃣ 5', callback_data: `qty_5_${cat.category_id}` },
-                { text: '✏️ Custom', callback_data: `qty_custom_${cat.category_id}` }
+                { text: `4️⃣ 4x (${formatCurrency(cat.price_4)})`, callback_data: `qty_4_${cat.category_id}` },
+                { text: `5️⃣ 5x (${formatCurrency(cat.price_5)})`, callback_data: `qty_5_${cat.category_id}` },
+                { text: `✏️ Custom (${formatCurrency(cat.price_custom)}/each)`, callback_data: `qty_custom_${cat.category_id}` }
             ],
-            [{ text: '↩️ Back', callback_data: 'back_categories' }]
+            [{ text: '↩️ Back to Categories', callback_data: 'back_categories' }]
         ];
+        
+        const stockMessage = cat.stock > 0 ? `✅ Available Stock: ${cat.stock}` : '❌ Out of Stock';
         
         await bot.sendMessage(
             chatId,
-            `📦 *Category:* ${cat.name}\n📊 *Available Stock:* ${cat.stock}\n💰 *Prices:*\n1 Qty: ${formatCurrency(cat.price_1)}\n2 Qty: ${formatCurrency(cat.price_2)}\n3 Qty: ${formatCurrency(cat.price_3)}\n4 Qty: ${formatCurrency(cat.price_4)}\n5 Qty: ${formatCurrency(cat.price_5)}\nCustom: ${formatCurrency(cat.price_custom)} each\n\nSelect quantity:`,
+            `📦 *Category:* ${cat.name}\n` +
+            `💰 *Prices:*\n` +
+            `1 Qty: ${formatCurrency(cat.price_1)}\n` +
+            `2 Qty: ${formatCurrency(cat.price_2)}\n` +
+            `3 Qty: ${formatCurrency(cat.price_3)}\n` +
+            `4 Qty: ${formatCurrency(cat.price_4)}\n` +
+            `5 Qty: ${formatCurrency(cat.price_5)}\n` +
+            `Custom: ${formatCurrency(cat.price_custom)} each\n\n` +
+            `${stockMessage}\n\n` +
+            `*Select quantity:*`,
             {
                 parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: quantityButtons }
@@ -130,7 +147,9 @@ const selectCategory = async (bot, user, message, categoryId) => {
         
     } catch (error) {
         logger.error('Error selecting category:', error);
-        await bot.sendMessage(chatId, '❌ Error. Please try again.');
+        await bot.sendMessage(chatId, '❌ Error. Please try again.', {
+            reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+        });
         userStates.delete(userId);
     }
 };
@@ -161,7 +180,7 @@ const selectQuantity = async (bot, user, message, quantity, categoryId) => {
             
             await bot.sendMessage(
                 chatId,
-                'Please enter quantity (max based on available stock):',
+                '✏️ Please enter the quantity you want (maximum based on available stock):',
                 {
                     reply_markup: { keyboard: [['↩️ Cancel']], resize_keyboard: true }
                 }
@@ -178,7 +197,9 @@ const selectQuantity = async (bot, user, message, quantity, categoryId) => {
         );
         
         if (category.rows.length === 0) {
-            await bot.sendMessage(chatId, '❌ Category not found.');
+            await bot.sendMessage(chatId, '❌ Category not found.', {
+                reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+            });
             return;
         }
         
@@ -186,7 +207,9 @@ const selectQuantity = async (bot, user, message, quantity, categoryId) => {
         
         // Check stock
         if (quantity > cat.stock) {
-            await bot.sendMessage(chatId, `❌ Only ${cat.stock} items available. Please select a lower quantity.`);
+            await bot.sendMessage(chatId, `❌ Only ${cat.stock} items available. Please select a lower quantity.`, {
+                reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+            });
             return;
         }
         
@@ -216,14 +239,14 @@ const selectQuantity = async (bot, user, message, quantity, categoryId) => {
         
         // Show order summary
         const summary = `📋 *Order Summary*\n\n` +
-            `Category: ${cat.name}\n` +
-            `Quantity: ${quantity}\n` +
-            `Total: ${formatCurrency(price)}\n\n` +
+            `*Category:* ${cat.name}\n` +
+            `*Quantity:* ${quantity}\n` +
+            `*Total Amount:* ${formatCurrency(price)}\n\n` +
             `Proceed to payment?`;
         
         const confirmButtons = [
             [
-                { text: '✅ Confirm', callback_data: `confirm_order_${categoryId}` },
+                { text: '✅ Confirm Order', callback_data: `confirm_order_${categoryId}` },
                 { text: '❌ Cancel', callback_data: 'back_categories' }
             ]
         ];
@@ -235,7 +258,105 @@ const selectQuantity = async (bot, user, message, quantity, categoryId) => {
         
     } catch (error) {
         logger.error('Error selecting quantity:', error);
-        await bot.sendMessage(chatId, '❌ Error. Please try again.');
+        await bot.sendMessage(chatId, '❌ Error. Please try again.', {
+            reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+        });
+    }
+};
+
+const processCustomQuantity = async (msg, state) => {
+    const bot = global.bot;
+    const userId = msg.from.id;
+    const chatId = msg.chat.id;
+    const text = msg.text;
+    
+    try {
+        if (text === '↩️ Cancel') {
+            // Clear session and show categories
+            const pool = getPool();
+            await pool.query(
+                'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+                [userId]
+            );
+            await showCategories(msg);
+            return;
+        }
+        
+        const quantity = parseInt(text);
+        if (isNaN(quantity) || quantity <= 0) {
+            await bot.sendMessage(chatId, '❌ Please enter a valid number.', {
+                reply_markup: { keyboard: [['↩️ Cancel']], resize_keyboard: true }
+            });
+            return;
+        }
+        
+        const pool = getPool();
+        
+        // Get category and check stock
+        const category = await pool.query(
+            'SELECT * FROM categories WHERE category_id = $1',
+            [state.categoryId]
+        );
+        
+        if (category.rows.length === 0) {
+            await bot.sendMessage(chatId, '❌ Category not found.', {
+                reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+            });
+            return;
+        }
+        
+        const cat = category.rows[0];
+        
+        if (quantity > cat.stock) {
+            await bot.sendMessage(chatId, `❌ Only ${cat.stock} items available. Please enter a lower quantity.`, {
+                reply_markup: { keyboard: [['↩️ Cancel']], resize_keyboard: true }
+            });
+            return;
+        }
+        
+        // Calculate price
+        const price = cat.price_custom * quantity;
+        
+        // Store order details
+        await pool.query(
+            `INSERT INTO user_sessions (user_id, temp_data, updated_at)
+             VALUES ($1, $2, NOW())
+             ON CONFLICT (user_id) DO UPDATE 
+             SET temp_data = $2, updated_at = NOW()`,
+            [userId, {
+                action: 'confirm_order',
+                categoryId: cat.category_id,
+                categoryName: cat.name,
+                quantity,
+                price,
+                total: price
+            }]
+        );
+        
+        // Show order summary
+        const summary = `📋 *Order Summary*\n\n` +
+            `*Category:* ${cat.name}\n` +
+            `*Quantity:* ${quantity}\n` +
+            `*Total Amount:* ${formatCurrency(price)}\n\n` +
+            `Proceed to payment?`;
+        
+        const confirmButtons = [
+            [
+                { text: '✅ Confirm Order', callback_data: `confirm_order_${cat.category_id}` },
+                { text: '❌ Cancel', callback_data: 'back_categories' }
+            ]
+        ];
+        
+        await bot.sendMessage(chatId, summary, {
+            parse_mode: 'Markdown',
+            reply_markup: { inline_keyboard: confirmButtons }
+        });
+        
+    } catch (error) {
+        logger.error('Error processing custom quantity:', error);
+        await bot.sendMessage(chatId, '❌ Error. Please try again.', {
+            reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+        });
     }
 };
 
@@ -261,11 +382,26 @@ const confirmOrder = async (bot, user, message, categoryId) => {
         );
         
         if (session.rows.length === 0 || !session.rows[0].temp_data || session.rows[0].temp_data.action !== 'confirm_order') {
-            await bot.sendMessage(chatId, '❌ Session expired. Please start over.');
+            await bot.sendMessage(chatId, '❌ Session expired. Please start over.', {
+                reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+            });
             return;
         }
         
         const orderData = session.rows[0].temp_data;
+        
+        // Check stock again
+        const category = await pool.query(
+            'SELECT stock FROM categories WHERE category_id = $1',
+            [categoryId]
+        );
+        
+        if (category.rows.length === 0 || category.rows[0].stock < orderData.quantity) {
+            await bot.sendMessage(chatId, '❌ Sorry, the stock has changed. Please try again.', {
+                reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+            });
+            return;
+        }
         
         // Generate order ID
         const orderId = generateOrderId();
@@ -294,13 +430,13 @@ const confirmOrder = async (bot, user, message, categoryId) => {
         const paymentMessage = `💳 *Payment Details*\n\n` +
             `*Order ID:* \`${orderId}\`\n` +
             `*Amount:* ${formatCurrency(orderData.total)}\n\n` +
-            `Scan QR code or send payment to the address below:\n\n` +
-            `Please send *screenshot* after payment.`;
+            `Please scan the QR code and send payment.\n\n` +
+            `After payment, click "I Have Paid" button and send the screenshot.`;
 
         const paymentKeyboard = {
             inline_keyboard: [
                 [{ text: '💰 I Have Paid', callback_data: `paid_${orderId}` }],
-                [{ text: '❌ Cancel Order', callback_data: 'back_categories' }]
+                [{ text: '❌ Cancel Order', callback_data: 'back_main' }]
             ]
         };
         
@@ -312,7 +448,9 @@ const confirmOrder = async (bot, user, message, categoryId) => {
         
     } catch (error) {
         logger.error('Error confirming order:', error);
-        await bot.sendMessage(chatId, '❌ Error creating order. Please try again.');
+        await bot.sendMessage(chatId, '❌ Error creating order. Please try again.', {
+            reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+        });
     }
 };
 
@@ -340,14 +478,10 @@ const paid = async (bot, user, message) => {
         if (session.rows.length === 0 || !session.rows[0].temp_data || session.rows[0].temp_data.action !== 'awaiting_payment') {
             await bot.sendMessage(
                 chatId,
-                '❌ No pending payment. Please start a new order.',
+                '❌ No pending payment found. Please start a new order.',
                 {
                     reply_markup: {
-                        keyboard: [
-                            ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
-                            ['📦 My Orders', '📜 Disclaimer'],
-                            ['🆘 Support']
-                        ],
+                        keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']],
                         resize_keyboard: true
                     }
                 }
@@ -357,15 +491,17 @@ const paid = async (bot, user, message) => {
         
         await bot.sendMessage(
             chatId,
-            '📤 Please send your payment screenshot:',
+            '📤 Please send your payment screenshot.\n\nAfter sending screenshot, you will need to provide the UTR/Transaction ID.',
             {
-                reply_markup: { keyboard: [['↩️ Cancel']], resize_keyboard: true }
+                reply_markup: { keyboard: [['↩️ Cancel Order']], resize_keyboard: true }
             }
         );
         
     } catch (error) {
         logger.error('Error in paid:', error);
-        await bot.sendMessage(chatId, '❌ Error. Please try again.');
+        await bot.sendMessage(chatId, '❌ Error. Please try again.', {
+            reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+        });
     }
 };
 
@@ -376,7 +512,7 @@ const processUTR = async (msg, state) => {
     const text = msg.text;
     
     try {
-        if (text === '↩️ Cancel') {
+        if (text === '↩️ Cancel Order') {
             // Clear session
             const pool = getPool();
             await pool.query(
@@ -384,14 +520,26 @@ const processUTR = async (msg, state) => {
                 [userId]
             );
             
-            await showCategories(msg);
+            await bot.sendMessage(
+                chatId,
+                '❌ Order cancelled.',
+                {
+                    reply_markup: {
+                        keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']],
+                        resize_keyboard: true
+                    }
+                }
+            );
             return;
         }
         
         if (!isValidUTR(text)) {
             await bot.sendMessage(
                 chatId,
-                '❌ Invalid UTR format. Please enter a valid UTR/Transaction ID.'
+                '❌ Invalid UTR format. Please enter a valid UTR/Transaction ID (8-20 characters, alphanumeric).',
+                {
+                    reply_markup: { keyboard: [['↩️ Cancel Order']], resize_keyboard: true }
+                }
             );
             return;
         }
@@ -407,7 +555,10 @@ const processUTR = async (msg, state) => {
         if (utrCheck.rows.length > 0) {
             await bot.sendMessage(
                 chatId,
-                '❌ This UTR number has already been used.'
+                '❌ This UTR number has already been used.',
+                {
+                    reply_markup: { keyboard: [['↩️ Cancel Order']], resize_keyboard: true }
+                }
             );
             return;
         }
@@ -419,7 +570,9 @@ const processUTR = async (msg, state) => {
         );
         
         if (session.rows.length === 0 || !session.rows[0].temp_data) {
-            await bot.sendMessage(chatId, '❌ Session expired. Please start over.');
+            await bot.sendMessage(chatId, '❌ Session expired. Please start over.', {
+                reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+            });
             return;
         }
         
@@ -439,7 +592,7 @@ const processUTR = async (msg, state) => {
             [text, orderData.orderId, userId]
         );
         
-        // Notify admin
+        // Get order details for notification
         const order = await pool.query(
             `SELECT o.*, c.name as category_name, u.username, u.first_name
              FROM orders o
@@ -460,12 +613,12 @@ const processUTR = async (msg, state) => {
                 `*Quantity:* ${orderInfo.quantity}\n` +
                 `*Total:* ${formatCurrency(orderInfo.total_price)}\n` +
                 `*UTR:* \`${text}\`\n\n` +
-                `Action required:`;
+                `Please review and take action:`;
 
             const adminButtons = {
                 inline_keyboard: [
                     [
-                        { text: '✅ Accept', callback_data: `admin_accept_${orderInfo.order_id}` },
+                        { text: '✅ Accept Payment', callback_data: `admin_accept_${orderInfo.order_id}` },
                         { text: '❌ Reject', callback_data: `admin_reject_${orderInfo.order_id}` }
                     ]
                 ]
@@ -490,7 +643,8 @@ const processUTR = async (msg, state) => {
                 CHANNELS.NOTIFY_ID,
                 `🎯 *New Order Submitted*\n` +
                 `Order ID: \`${orderInfo.order_id}\`\n` +
-                `Amount: ${formatCurrency(orderInfo.total_price)}`
+                `Amount: ${formatCurrency(orderInfo.total_price)}\n` +
+                `Status: Pending Approval`
             );
         }
         
@@ -503,18 +657,16 @@ const processUTR = async (msg, state) => {
         // Thank you message
         await bot.sendMessage(
             chatId,
-            `✅ *Order submitted successfully!*\n\n` +
-            `*Order ID:* \`${orderData.orderId}\`\n\n` +
+            `✅ *Order Submitted Successfully!*\n\n` +
+            `*Order ID:* \`${orderData.orderId}\`\n` +
+            `*Amount:* ${formatCurrency(orderData.total)}\n\n` +
+            `Your order has been sent to admin for verification.\n` +
             `You will receive your vouchers once payment is confirmed.\n\n` +
             `Thank you for your purchase!`,
             {
                 parse_mode: 'Markdown',
                 reply_markup: {
-                    keyboard: [
-                        ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
-                        ['📦 My Orders', '📜 Disclaimer'],
-                        ['🆘 Support']
-                    ],
+                    keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']],
                     resize_keyboard: true
                 }
             }
@@ -522,7 +674,9 @@ const processUTR = async (msg, state) => {
         
     } catch (error) {
         logger.error('Error processing UTR:', error);
-        await bot.sendMessage(chatId, '❌ Error processing payment. Please try again.');
+        await bot.sendMessage(chatId, '❌ Error processing payment. Please try again.', {
+            reply_markup: { keyboard: [['🛒 Buy Voucher', '🔁 Recover Vouchers'], ['📦 My Orders', '📜 Disclaimer'], ['🆘 Support']], resize_keyboard: true }
+        });
     }
 };
 
@@ -530,6 +684,7 @@ module.exports = {
     showCategories,
     selectCategory,
     selectQuantity,
+    processCustomQuantity,
     confirmOrder,
     paid,
     processUTR
