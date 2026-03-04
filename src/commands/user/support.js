@@ -21,9 +21,10 @@ const start = async (msg) => {
         
         await bot.sendMessage(
             chatId,
-            '🆘 Support\n\nPlease describe your issue. Our team will respond shortly.\n\n⚠️ Fake or abusive messages may result in a ban.',
+            '🆘 *Support*\n\nPlease describe your issue. Our team will respond shortly.\n\n⚠️ Fake or abusive messages may result in a ban.',
             {
-                reply_markup: { keyboard: KEYBOARD.LEAVE, resize_keyboard: true }
+                parse_mode: 'Markdown',
+                reply_markup: { keyboard: [['↩️ Leave']], resize_keyboard: true }
             }
         );
         
@@ -56,7 +57,7 @@ const process = async (msg) => {
         }
         
         // Check for abuse
-        const abusiveWords = ['fake', 'scam', 'abuse', 'illegal', 'hack', 'cheat'];
+        const abusiveWords = ['fake', 'scam', 'abuse', 'illegal', 'hack', 'cheat', 'fuck', 'shit'];
         const isAbusive = abusiveWords.some(word => text.toLowerCase().includes(word));
         
         if (isAbusive) {
@@ -74,51 +75,88 @@ const process = async (msg) => {
                 chatId,
                 '⏳ You have been temporarily restricted for 30 minutes due to inappropriate language.'
             );
+            
+            // Clear session
+            await pool.query(
+                'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+                [userId]
+            );
             return;
         }
         
+        const pool = getPool();
+        
+        // Save to database
+        const ticket = await pool.query(
+            `INSERT INTO support_tickets (user_id, message, status)
+             VALUES ($1, $2, 'open')
+             RETURNING ticket_id`,
+            [userId, text]
+        );
+        
         // Forward to admin
-        const supportMessage = `🆘 New Support Message
-
-From: ${firstName} (@${username})
-User ID: ${userId}
-Time: ${new Date().toLocaleString()}
-
-Message:
-${text}`;
+        const supportMessage = `🆘 *New Support Message*\n\n` +
+            `*Ticket ID:* ${ticket.rows[0].ticket_id}\n` +
+            `*From:* ${firstName} (@${username})\n` +
+            `*User ID:* \`${userId}\`\n` +
+            `*Time:* ${new Date().toLocaleString()}\n\n` +
+            `*Message:*\n${text}`;
 
         const supportButtons = {
             inline_keyboard: [
                 [
-                    { text: '✏️ Reply', callback_data: `admin_reply_${userId}` },
+                    { text: '✏️ Reply', callback_data: `admin_reply_${userId}_${ticket.rows[0].ticket_id}` },
                     { text: '🚫 Block', callback_data: `admin_block_${userId}` }
+                ],
+                [
+                    { text: '✅ Resolve', callback_data: `admin_resolve_${ticket.rows[0].ticket_id}` }
                 ]
             ]
         };
         
         await bot.sendMessage(process.env.ADMIN_ID, supportMessage, {
+            parse_mode: 'Markdown',
             reply_markup: supportButtons
         });
         
-        // Save to database
-        const pool = getPool();
+        // Clear session
         await pool.query(
-            `INSERT INTO support_tickets (user_id, message, status)
-             VALUES ($1, $2, 'open')`,
-            [userId, text]
+            'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+            [userId]
         );
         
         await bot.sendMessage(
             chatId,
-            '✅ Your message has been sent to support. You will receive a reply soon.',
+            '✅ *Your message has been sent to support.*\n\nYou will receive a reply soon.',
             {
-                reply_markup: { keyboard: KEYBOARD.LEAVE, resize_keyboard: true }
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    keyboard: [
+                        ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
+                        ['📦 My Orders', '📜 Disclaimer'],
+                        ['🆘 Support']
+                    ],
+                    resize_keyboard: true
+                }
             }
         );
         
     } catch (error) {
         logger.error('Error processing support message:', error);
-        await bot.sendMessage(chatId, '❌ Error sending message. Please try again.');
+        await bot.sendMessage(
+            chatId, 
+            '❌ Error sending message. Please try again later.',
+            {
+                reply_markup: {
+                    keyboard: [
+                        ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
+                        ['📦 My Orders', '📜 Disclaimer'],
+                        ['🆘 Support']
+                    ],
+                    resize_keyboard: true
+                }
+            }
+        );
     }
 };
 
