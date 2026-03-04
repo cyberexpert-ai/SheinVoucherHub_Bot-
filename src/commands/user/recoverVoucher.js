@@ -5,11 +5,19 @@ const { isExpired } = require('../../utils/helpers');
 
 const prompt = async (msg) => {
     const bot = global.bot;
-    const chatId = msg.chat.id;
     const userId = msg.from.id;
+    const chatId = msg.chat.id;
     
     try {
+        logger.info(`Recovery prompt for user ${userId}`);
+        
         const pool = getPool();
+        
+        // Clear any existing session
+        await pool.query(
+            'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+            [userId]
+        );
         
         // Set session state
         await pool.query(
@@ -21,7 +29,7 @@ const prompt = async (msg) => {
         );
         
         await bot.sendMessage(chatId, MESSAGES.RECOVERY_PROMPT, {
-            reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+            reply_markup: { keyboard: [['↩️ Back']], resize_keyboard: true }
         });
         
     } catch (error) {
@@ -37,6 +45,8 @@ const process = async (msg) => {
     const text = msg.text;
     
     try {
+        logger.info(`Processing recovery for user ${userId}: ${text}`);
+        
         if (text === '↩️ Back') {
             // Clear session and go back
             const pool = getPool();
@@ -52,7 +62,9 @@ const process = async (msg) => {
         
         // Validate order ID format
         if (!text.startsWith('SVH-')) {
-            await bot.sendMessage(chatId, '❌ Invalid Order ID format. Please use format: SVH-XXXXXXXX-XXXXXX');
+            await bot.sendMessage(chatId, '❌ Invalid Order ID format. Please use format: SVH-XXXXXXXX-XXXXXX', {
+                reply_markup: { keyboard: [['↩️ Back']], resize_keyboard: true }
+            });
             return;
         }
         
@@ -69,8 +81,14 @@ const process = async (msg) => {
         
         if (order.rows.length === 0) {
             await bot.sendMessage(chatId, MESSAGES.ORDER_NOT_FOUND(text), {
-                reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+                reply_markup: { keyboard: [['↩️ Back']], resize_keyboard: true }
             });
+            
+            // Clear session
+            await pool.query(
+                'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+                [userId]
+            );
             return;
         }
         
@@ -79,34 +97,60 @@ const process = async (msg) => {
         // Check if order belongs to this user
         if (ord.user_id !== userId) {
             await bot.sendMessage(chatId, MESSAGES.WRONG_ACCOUNT, {
-                reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+                reply_markup: { keyboard: [['↩️ Back']], resize_keyboard: true }
             });
+            
+            // Clear session
+            await pool.query(
+                'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+                [userId]
+            );
             return;
         }
         
-        // Check if order is expired
-        if (ord.status === 'successful' && ord.recovered) {
-            await bot.sendMessage(chatId, '❌ This order has already been recovered.');
-            return;
-        }
-        
+        // Check if order is within recovery window
         if (isExpired(ord.created_at, 2)) {
             await bot.sendMessage(chatId, MESSAGES.ORDER_EXPIRED(text), {
-                reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+                reply_markup: { keyboard: [['↩️ Back']], resize_keyboard: true }
             });
+            
+            // Clear session
+            await pool.query(
+                'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+                [userId]
+            );
             return;
         }
         
+        // Check if already recovered
+        if (ord.recovered) {
+            await bot.sendMessage(chatId, '❌ This order has already been recovered.', {
+                reply_markup: { keyboard: [['↩️ Back']], resize_keyboard: true }
+            });
+            
+            // Clear session
+            await pool.query(
+                'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+                [userId]
+            );
+            return;
+        }
+        
+        // Update order recovery status
+        await pool.query(
+            `UPDATE orders SET recovered = true, recovery_expires = NOW() + INTERVAL '2 hours' 
+             WHERE order_id = $1`,
+            [text]
+        );
+        
         // Forward to admin
-        const adminMessage = `🔄 Recovery Request
-
-User ID: ${userId}
-Order ID: ${text}
-Category: ${ord.category_name}
-Quantity: ${ord.quantity}
-Original Status: ${ord.status}
-
-Please handle this recovery request:`;
+        const adminMessage = `🔄 *Recovery Request*\n\n` +
+            `*User ID:* \`${userId}\`\n` +
+            `*Order ID:* \`${text}\`\n` +
+            `*Category:* ${ord.category_name}\n` +
+            `*Quantity:* ${ord.quantity}\n` +
+            `*Original Status:* ${ord.status}\n\n` +
+            `Please handle this recovery request:`;
 
         const adminButtons = {
             inline_keyboard: [
@@ -118,27 +162,37 @@ Please handle this recovery request:`;
         };
         
         await bot.sendMessage(process.env.ADMIN_ID, adminMessage, {
+            parse_mode: 'Markdown',
             reply_markup: adminButtons
         });
         
-        // Update order recovery status
+        // Clear session
         await pool.query(
-            `UPDATE orders SET recovered = true, recovery_expires = NOW() + INTERVAL '2 hours' 
-             WHERE order_id = $1`,
-            [text]
+            'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+            [userId]
         );
         
         await bot.sendMessage(
             chatId,
-            `✅ Recovery request sent for order ${text}.\n\nYou will be notified once processed.`,
+            `✅ *Recovery request sent for order* \`${text}\`.\n\nYou will be notified once processed.`,
             {
-                reply_markup: { keyboard: KEYBOARD.BACK, resize_keyboard: true }
+                parse_mode: 'Markdown',
+                reply_markup: { keyboard: KEYBOARD.MAIN, resize_keyboard: true }
             }
         );
         
     } catch (error) {
         logger.error('Error processing recovery:', error);
-        await bot.sendMessage(chatId, '❌ Error processing recovery request.');
+        await bot.sendMessage(chatId, '❌ Error processing recovery request.', {
+            reply_markup: { keyboard: KEYBOARD.MAIN, resize_keyboard: true }
+        });
+        
+        // Clear session on error
+        const pool = getPool();
+        await pool.query(
+            'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+            [userId]
+        );
     }
 };
 
