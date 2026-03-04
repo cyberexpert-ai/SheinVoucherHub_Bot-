@@ -14,6 +14,8 @@ const showAdminPanel = async (msg) => {
     }
     
     try {
+        logger.info(`Admin panel accessed by ${userId}`);
+        
         const pool = getPool();
         
         // Get stats
@@ -30,7 +32,7 @@ const showAdminPanel = async (msg) => {
         const categoryStats = await pool.query(`
             SELECT 
                 COUNT(*) as total_categories,
-                SUM(stock) as total_stock
+                COALESCE(SUM(stock), 0) as total_stock
             FROM categories WHERE is_active = true
         `);
         
@@ -38,17 +40,17 @@ const showAdminPanel = async (msg) => {
         const catStats = categoryStats.rows[0];
         
         const adminMessage = `👑 *Admin Panel*\n\n` +
-            `📊 *Quick Stats*\n` +
+            `📊 *Quick Statistics*\n` +
             `━━━━━━━━━━━━━━━━━━\n` +
             `👥 *Total Users:* ${userCount.rows[0].count}\n` +
             `📦 *Total Orders:* ${stats.total_orders || 0}\n` +
-            `⏳ *Pending:* ${stats.pending || 0}\n` +
-            `✅ *Successful:* ${stats.successful || 0}\n` +
-            `💰 *Revenue:* ${formatCurrency(stats.revenue || 0)}\n` +
+            `⏳ *Pending Orders:* ${stats.pending || 0}\n` +
+            `✅ *Successful Orders:* ${stats.successful || 0}\n` +
+            `💰 *Total Revenue:* ${formatCurrency(stats.revenue || 0)}\n` +
             `📊 *Categories:* ${catStats.total_categories || 0}\n` +
             `🎫 *Total Stock:* ${catStats.total_stock || 0}\n\n` +
             `━━━━━━━━━━━━━━━━━━\n` +
-            `Select an option below:`;
+            `*Select an option:*`;
 
         const adminKeyboard = {
             inline_keyboard: [
@@ -57,10 +59,10 @@ const showAdminPanel = async (msg) => {
                 [{ text: '💰 Price Management', callback_data: 'admin_price' }],
                 [{ text: '👥 User Management', callback_data: 'admin_users' }],
                 [{ text: '📦 Order Management', callback_data: 'admin_orders' }],
-                [{ text: '📢 Broadcast', callback_data: 'admin_broadcast' }],
+                [{ text: '📢 Broadcast Message', callback_data: 'admin_broadcast' }],
                 [{ text: '🏷 Discount Codes', callback_data: 'admin_discount' }],
-                [{ text: '📈 Detailed Stats', callback_data: 'admin_stats' }],
-                [{ text: '🔒 Security', callback_data: 'admin_security' }]
+                [{ text: '📈 Detailed Statistics', callback_data: 'admin_stats' }],
+                [{ text: '🔒 Security Settings', callback_data: 'admin_security' }]
             ]
         };
         
@@ -73,7 +75,7 @@ const showAdminPanel = async (msg) => {
         logger.error('Error in admin panel:', error);
         await bot.sendMessage(
             chatId, 
-            '❌ Error loading admin panel. Please check logs.',
+            '❌ Error loading admin panel. Please check logs and database connection.',
             {
                 reply_markup: {
                     keyboard: [
