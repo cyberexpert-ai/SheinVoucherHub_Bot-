@@ -65,17 +65,9 @@ Please send your message. Our team will respond shortly.`,
 
         UTR_USED: `⚠️ This UTR number has already been used. Please provide a valid UTR.`,
 
-        USER_BLOCKED: `🚫 You have been blocked from using this bot.
+        USER_BLOCKED: `🚫 You have been blocked from using this bot.\n\nReason: %reason%\n\nContact @SheinSupportRobot for assistance.`,
 
-Reason: %reason%
-
-Contact @SheinSupportRobot for assistance.`,
-
-        TEMP_BLOCKED: (minutes) => `⏳ You are temporarily restricted for ${minutes} minutes.
-
-Reason: %reason%
-
-Please wait and try again later.`
+        TEMP_BLOCKED: (minutes) => `⏳ You are temporarily restricted for ${minutes} minutes.\n\nReason: %reason%\n\nPlease wait and try again later.`
     },
 
     // Button texts
