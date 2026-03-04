@@ -1,7 +1,10 @@
 const { getPool } = require('../../database/database');
 const logger = require('../../utils/logger');
-const { generateOrderId, formatCurrency, isValidUTR, calculatePrice } = require('../../utils/helpers');
-const { PAYMENT_QR, BUTTONS, MESSAGES, CHANNELS } = require('../../utils/constants');
+const { generateOrderId, formatCurrency, isValidUTR } = require('../../utils/helpers');
+const { PAYMENT_QR, MESSAGES, CHANNELS } = require('../../utils/constants');
+
+// Store user states to prevent multiple category displays
+const userStates = new Map();
 
 const showCategories = async (msg) => {
     const bot = global.bot;
@@ -9,6 +12,13 @@ const showCategories = async (msg) => {
     const chatId = msg.chat.id;
     
     try {
+        // Check if user already viewing categories
+        if (userStates.has(userId) && userStates.get(userId) === 'viewing_categories') {
+            return;
+        }
+        
+        userStates.set(userId, 'viewing_categories');
+        
         const pool = getPool();
         
         // Get active categories with stock
@@ -20,13 +30,17 @@ const showCategories = async (msg) => {
             await bot.sendMessage(chatId, '❌ No vouchers available at the moment.', {
                 reply_markup: { keyboard: [['↩️ Back']], resize_keyboard: true }
             });
+            userStates.delete(userId);
             return;
         }
         
-        // Create category buttons
-        const buttons = categories.rows.map(cat => [
-            { text: `${cat.name} (Stock: ${cat.stock})`, callback_data: `category_${cat.category_id}` }
-        ]);
+        // Create category buttons - fix: show only once
+        const buttons = [];
+        categories.rows.forEach(cat => {
+            buttons.push([
+                { text: `${cat.name} (Stock: ${cat.stock})`, callback_data: `category_${cat.category_id}` }
+            ]);
+        });
         
         buttons.push([{ text: '↩️ Back', callback_data: 'back_main' }]);
         
@@ -38,17 +52,31 @@ const showCategories = async (msg) => {
             }
         );
         
+        // Clear state after 30 seconds
+        setTimeout(() => {
+            userStates.delete(userId);
+        }, 30000);
+        
     } catch (error) {
         logger.error('Error showing categories:', error);
         await bot.sendMessage(chatId, '❌ Error loading categories. Please try again.');
+        userStates.delete(userId);
     }
 };
 
 const selectCategory = async (bot, user, message, categoryId) => {
     const chatId = message.chat.id;
     const userId = user.id;
+    const messageId = message.message_id;
     
     try {
+        // Delete previous message
+        try {
+            await bot.deleteMessage(chatId, messageId);
+        } catch (e) {
+            // Ignore if can't delete
+        }
+        
         const pool = getPool();
         
         // Get category details
@@ -59,6 +87,7 @@ const selectCategory = async (bot, user, message, categoryId) => {
         
         if (category.rows.length === 0) {
             await bot.sendMessage(chatId, '❌ Category not found.');
+            userStates.delete(userId);
             return;
         }
         
@@ -76,37 +105,49 @@ const selectCategory = async (bot, user, message, categoryId) => {
         // Show quantity selection
         const quantityButtons = [
             [
-                { text: '1', callback_data: `qty_1_${cat.category_id}` },
-                { text: '2', callback_data: `qty_2_${cat.category_id}` },
-                { text: '3', callback_data: `qty_3_${cat.category_id}` }
+                { text: '1️⃣ 1', callback_data: `qty_1_${cat.category_id}` },
+                { text: '2️⃣ 2', callback_data: `qty_2_${cat.category_id}` },
+                { text: '3️⃣ 3', callback_data: `qty_3_${cat.category_id}` }
             ],
             [
-                { text: '4', callback_data: `qty_4_${cat.category_id}` },
-                { text: '5', callback_data: `qty_5_${cat.category_id}` },
-                { text: 'Custom', callback_data: `qty_custom_${cat.category_id}` }
+                { text: '4️⃣ 4', callback_data: `qty_4_${cat.category_id}` },
+                { text: '5️⃣ 5', callback_data: `qty_5_${cat.category_id}` },
+                { text: '✏️ Custom', callback_data: `qty_custom_${cat.category_id}` }
             ],
             [{ text: '↩️ Back', callback_data: 'back_categories' }]
         ];
         
         await bot.sendMessage(
             chatId,
-            `📦 Category: ${cat.name}\nAvailable Stock: ${cat.stock}\n\nSelect quantity:`,
+            `📦 *Category:* ${cat.name}\n📊 *Available Stock:* ${cat.stock}\n💰 *Prices:*\n1 Qty: ${formatCurrency(cat.price_1)}\n2 Qty: ${formatCurrency(cat.price_2)}\n3 Qty: ${formatCurrency(cat.price_3)}\n4 Qty: ${formatCurrency(cat.price_4)}\n5 Qty: ${formatCurrency(cat.price_5)}\nCustom: ${formatCurrency(cat.price_custom)} each\n\nSelect quantity:`,
             {
+                parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: quantityButtons }
             }
         );
         
+        userStates.delete(userId);
+        
     } catch (error) {
         logger.error('Error selecting category:', error);
         await bot.sendMessage(chatId, '❌ Error. Please try again.');
+        userStates.delete(userId);
     }
 };
 
 const selectQuantity = async (bot, user, message, quantity, categoryId) => {
     const chatId = message.chat.id;
     const userId = user.id;
+    const messageId = message.message_id;
     
     try {
+        // Delete previous message
+        try {
+            await bot.deleteMessage(chatId, messageId);
+        } catch (e) {
+            // Ignore if can't delete
+        }
+        
         const pool = getPool();
         
         if (quantity === 'custom') {
@@ -152,7 +193,7 @@ const selectQuantity = async (bot, user, message, quantity, categoryId) => {
         // Calculate price
         let price;
         if (quantity <= 5) {
-            price = cat[`price_${quantity}`] || cat.price_custom * quantity;
+            price = cat[`price_${quantity}`];
         } else {
             price = cat.price_custom * quantity;
         }
@@ -174,13 +215,11 @@ const selectQuantity = async (bot, user, message, quantity, categoryId) => {
         );
         
         // Show order summary
-        const summary = `📋 Order Summary
-
-Category: ${cat.name}
-Quantity: ${quantity}
-Total: ${formatCurrency(price)}
-
-Proceed to payment?`;
+        const summary = `📋 *Order Summary*\n\n` +
+            `Category: ${cat.name}\n` +
+            `Quantity: ${quantity}\n` +
+            `Total: ${formatCurrency(price)}\n\n` +
+            `Proceed to payment?`;
         
         const confirmButtons = [
             [
@@ -190,6 +229,7 @@ Proceed to payment?`;
         ];
         
         await bot.sendMessage(chatId, summary, {
+            parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: confirmButtons }
         });
         
@@ -199,94 +239,19 @@ Proceed to payment?`;
     }
 };
 
-const processCustomQuantity = async (msg, state) => {
-    const bot = global.bot;
-    const userId = msg.from.id;
-    const chatId = msg.chat.id;
-    const text = msg.text;
-    
-    try {
-        if (text === '↩️ Cancel') {
-            await showCategories(msg);
-            return;
-        }
-        
-        const quantity = parseInt(text);
-        if (isNaN(quantity) || quantity <= 0) {
-            await bot.sendMessage(chatId, '❌ Please enter a valid number.');
-            return;
-        }
-        
-        const pool = getPool();
-        
-        // Get category and check stock
-        const category = await pool.query(
-            'SELECT * FROM categories WHERE category_id = $1',
-            [state.categoryId]
-        );
-        
-        if (category.rows.length === 0) {
-            await bot.sendMessage(chatId, '❌ Category not found.');
-            return;
-        }
-        
-        const cat = category.rows[0];
-        
-        if (quantity > cat.stock) {
-            await bot.sendMessage(chatId, `❌ Only ${cat.stock} items available. Please enter a lower quantity.`);
-            return;
-        }
-        
-        // Calculate price (use price_custom * quantity)
-        const price = cat.price_custom * quantity;
-        
-        // Store order details
-        await pool.query(
-            `INSERT INTO user_sessions (user_id, temp_data, updated_at)
-             VALUES ($1, $2, NOW())
-             ON CONFLICT (user_id) DO UPDATE 
-             SET temp_data = $2, updated_at = NOW()`,
-            [userId, {
-                action: 'confirm_order',
-                categoryId: cat.category_id,
-                categoryName: cat.name,
-                quantity,
-                price,
-                total: price
-            }]
-        );
-        
-        // Show order summary
-        const summary = `📋 Order Summary
-
-Category: ${cat.name}
-Quantity: ${quantity}
-Total: ${formatCurrency(price)}
-
-Proceed to payment?`;
-        
-        const confirmButtons = [
-            [
-                { text: '✅ Confirm', callback_data: `confirm_order_${cat.category_id}` },
-                { text: '❌ Cancel', callback_data: 'back_categories' }
-            ]
-        ];
-        
-        await bot.sendMessage(chatId, summary, {
-            reply_markup: { inline_keyboard: confirmButtons }
-        });
-        
-    } catch (error) {
-        logger.error('Error processing custom quantity:', error);
-        await bot.sendMessage(chatId, '❌ Error. Please try again.');
-    }
-};
-
 const confirmOrder = async (bot, user, message, categoryId) => {
     const chatId = message.chat.id;
     const userId = user.id;
+    const messageId = message.message_id;
     
     try {
+        // Delete previous message
+        try {
+            await bot.deleteMessage(chatId, messageId);
+        } catch (e) {
+            // Ignore if can't delete
+        }
+        
         const pool = getPool();
         
         // Get session data
@@ -295,7 +260,7 @@ const confirmOrder = async (bot, user, message, categoryId) => {
             [userId]
         );
         
-        if (session.rows.length === 0 || !session.rows[0].temp_data) {
+        if (session.rows.length === 0 || !session.rows[0].temp_data || session.rows[0].temp_data.action !== 'confirm_order') {
             await bot.sendMessage(chatId, '❌ Session expired. Please start over.');
             return;
         }
@@ -312,34 +277,36 @@ const confirmOrder = async (bot, user, message, categoryId) => {
             [orderId, userId, categoryId, orderData.quantity, orderData.total]
         );
         
-        // Update session
+        // Update session with order ID
         await pool.query(
             `INSERT INTO user_sessions (user_id, temp_data, updated_at)
              VALUES ($1, $2, NOW())
              ON CONFLICT (user_id) DO UPDATE 
              SET temp_data = $2, updated_at = NOW()`,
-            [userId, { action: 'awaiting_payment', orderId, ...orderData }]
+            [userId, { 
+                action: 'awaiting_payment', 
+                orderId, 
+                ...orderData 
+            }]
         );
         
         // Show payment QR
-        const paymentMessage = `💳 Payment Details
-
-Order ID: ${orderId}
-Amount: ${formatCurrency(orderData.total)}
-
-Scan QR code or send payment to the address below:
-
-Please send screenshot after payment.`;
+        const paymentMessage = `💳 *Payment Details*\n\n` +
+            `*Order ID:* \`${orderId}\`\n` +
+            `*Amount:* ${formatCurrency(orderData.total)}\n\n` +
+            `Scan QR code or send payment to the address below:\n\n` +
+            `Please send *screenshot* after payment.`;
 
         const paymentKeyboard = {
             inline_keyboard: [
-                [{ text: '💰 Paid', callback_data: `paid_${orderId}` }],
-                [{ text: '❌ Cancel', callback_data: 'back_categories' }]
+                [{ text: '💰 I Have Paid', callback_data: `paid_${orderId}` }],
+                [{ text: '❌ Cancel Order', callback_data: 'back_categories' }]
             ]
         };
         
         await bot.sendPhoto(chatId, PAYMENT_QR, {
             caption: paymentMessage,
+            parse_mode: 'Markdown',
             reply_markup: paymentKeyboard
         });
         
@@ -352,17 +319,53 @@ Please send screenshot after payment.`;
 const paid = async (bot, user, message) => {
     const chatId = message.chat.id;
     const userId = user.id;
+    const messageId = message.message_id;
     
     try {
+        // Delete previous message
+        try {
+            await bot.deleteMessage(chatId, messageId);
+        } catch (e) {
+            // Ignore if can't delete
+        }
+        
+        const pool = getPool();
+        
+        // Check if user has pending payment session
+        const session = await pool.query(
+            'SELECT temp_data FROM user_sessions WHERE user_id = $1',
+            [userId]
+        );
+        
+        if (session.rows.length === 0 || !session.rows[0].temp_data || session.rows[0].temp_data.action !== 'awaiting_payment') {
+            await bot.sendMessage(
+                chatId,
+                '❌ No pending payment. Please start a new order.',
+                {
+                    reply_markup: {
+                        keyboard: [
+                            ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
+                            ['📦 My Orders', '📜 Disclaimer'],
+                            ['🆘 Support']
+                        ],
+                        resize_keyboard: true
+                    }
+                }
+            );
+            return;
+        }
+        
         await bot.sendMessage(
             chatId,
-            'Please send your payment screenshot:',
+            '📤 Please send your payment screenshot:',
             {
                 reply_markup: { keyboard: [['↩️ Cancel']], resize_keyboard: true }
             }
         );
+        
     } catch (error) {
         logger.error('Error in paid:', error);
+        await bot.sendMessage(chatId, '❌ Error. Please try again.');
     }
 };
 
@@ -374,6 +377,13 @@ const processUTR = async (msg, state) => {
     
     try {
         if (text === '↩️ Cancel') {
+            // Clear session
+            const pool = getPool();
+            await pool.query(
+                'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+                [userId]
+            );
+            
             await showCategories(msg);
             return;
         }
@@ -395,34 +405,38 @@ const processUTR = async (msg, state) => {
         );
         
         if (utrCheck.rows.length > 0) {
-            // Fraud detection - temp block
-            await pool.query(
-                `UPDATE users 
-                 SET is_blocked = true, block_reason = 'Duplicate UTR attempt', 
-                     block_expires = NOW() + INTERVAL '30 minutes'
-                 WHERE user_id = $1`,
-                [userId]
-            );
-            
             await bot.sendMessage(
                 chatId,
-                '⏳ You have been temporarily restricted for 30 minutes due to suspicious activity.'
+                '❌ This UTR number has already been used.'
             );
             return;
         }
+        
+        // Get session data
+        const session = await pool.query(
+            'SELECT temp_data FROM user_sessions WHERE user_id = $1',
+            [userId]
+        );
+        
+        if (session.rows.length === 0 || !session.rows[0].temp_data) {
+            await bot.sendMessage(chatId, '❌ Session expired. Please start over.');
+            return;
+        }
+        
+        const orderData = session.rows[0].temp_data;
         
         // Update order with UTR and screenshot
         await pool.query(
             `UPDATE orders 
              SET utr_number = $2, screenshot_file_id = $3, updated_at = NOW()
              WHERE order_id = $1`,
-            [state.orderId, text, state.screenshot]
+            [orderData.orderId, text, orderData.screenshot]
         );
         
         // Track UTR
         await pool.query(
             'INSERT INTO utr_tracking (utr_number, order_id, user_id) VALUES ($1, $2, $3)',
-            [text, state.orderId, userId]
+            [text, orderData.orderId, userId]
         );
         
         // Notify admin
@@ -432,41 +446,41 @@ const processUTR = async (msg, state) => {
              JOIN categories c ON o.category_id = c.category_id
              JOIN users u ON o.user_id = u.user_id
              WHERE o.order_id = $1`,
-            [state.orderId]
+            [orderData.orderId]
         );
         
         if (order.rows.length > 0) {
-            const orderData = order.rows[0];
+            const orderInfo = order.rows[0];
             
-            const adminMessage = `🆕 New Order Submitted!
-
-Order ID: ${orderData.order_id}
-User: ${orderData.first_name} (@${orderData.username || 'N/A'})
-User ID: ${orderData.user_id}
-Category: ${orderData.category_name}
-Quantity: ${orderData.quantity}
-Total: ${formatCurrency(orderData.total_price)}
-UTR: ${text}
-
-Action required:`;
+            const adminMessage = `🆕 *New Order Submitted!*\n\n` +
+                `*Order ID:* \`${orderInfo.order_id}\`\n` +
+                `*User:* ${orderInfo.first_name} (@${orderInfo.username || 'N/A'})\n` +
+                `*User ID:* \`${orderInfo.user_id}\`\n` +
+                `*Category:* ${orderInfo.category_name}\n` +
+                `*Quantity:* ${orderInfo.quantity}\n` +
+                `*Total:* ${formatCurrency(orderInfo.total_price)}\n` +
+                `*UTR:* \`${text}\`\n\n` +
+                `Action required:`;
 
             const adminButtons = {
                 inline_keyboard: [
                     [
-                        { text: '✅ Accept', callback_data: `admin_accept_${orderData.order_id}` },
-                        { text: '❌ Reject', callback_data: `admin_reject_${orderData.order_id}` }
+                        { text: '✅ Accept', callback_data: `admin_accept_${orderInfo.order_id}` },
+                        { text: '❌ Reject', callback_data: `admin_reject_${orderInfo.order_id}` }
                     ]
                 ]
             };
             
             // Send screenshot to admin
-            if (state.screenshot) {
-                await bot.sendPhoto(process.env.ADMIN_ID, state.screenshot, {
+            if (orderData.screenshot) {
+                await bot.sendPhoto(process.env.ADMIN_ID, orderData.screenshot, {
                     caption: adminMessage,
+                    parse_mode: 'Markdown',
                     reply_markup: adminButtons
                 });
             } else {
                 await bot.sendMessage(process.env.ADMIN_ID, adminMessage, {
+                    parse_mode: 'Markdown',
                     reply_markup: adminButtons
                 });
             }
@@ -474,7 +488,9 @@ Action required:`;
             // Send notification to channel
             await bot.sendMessage(
                 CHANNELS.NOTIFY_ID,
-                `🎯 New Order Submitted\nOrder ID: ${orderData.order_id}\nAmount: ${formatCurrency(orderData.total_price)}`
+                `🎯 *New Order Submitted*\n` +
+                `Order ID: \`${orderInfo.order_id}\`\n` +
+                `Amount: ${formatCurrency(orderInfo.total_price)}`
             );
         }
         
@@ -487,8 +503,12 @@ Action required:`;
         // Thank you message
         await bot.sendMessage(
             chatId,
-            `✅ Order submitted successfully!\n\nOrder ID: ${state.orderId}\n\nYou will receive your vouchers once payment is confirmed.\n\nThank you for your purchase!`,
+            `✅ *Order submitted successfully!*\n\n` +
+            `*Order ID:* \`${orderData.orderId}\`\n\n` +
+            `You will receive your vouchers once payment is confirmed.\n\n` +
+            `Thank you for your purchase!`,
             {
+                parse_mode: 'Markdown',
                 reply_markup: {
                     keyboard: [
                         ['🛒 Buy Voucher', '🔁 Recover Vouchers'],
@@ -510,7 +530,6 @@ module.exports = {
     showCategories,
     selectCategory,
     selectQuantity,
-    processCustomQuantity,
     confirmOrder,
     paid,
     processUTR
