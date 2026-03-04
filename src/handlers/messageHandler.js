@@ -1,7 +1,7 @@
 const { checkUserStatus, checkChannelJoin } = require('../middlewares/auth');
 const { getPool } = require('../database/database');
 const logger = require('../utils/logger');
-const { MESSAGES, BUTTONS, KEYBOARD } = require('../utils/constants');
+const { MESSAGES, KEYBOARD } = require('../utils/constants');
 const startCommand = require('../commands/start');
 const userCommands = require('../commands/user/index');
 const adminCommands = require('../commands/admin/index');
@@ -13,6 +13,8 @@ const handleMessage = async (msg) => {
     const text = msg.text;
     
     try {
+        logger.info(`Handling message from user ${userId}: ${text}`);
+        
         // Check if user is blocked
         const userStatus = await checkUserStatus(userId);
         
@@ -37,43 +39,85 @@ const handleMessage = async (msg) => {
             return;
         }
         
-        // Check channel join for non-commands
-        if (text !== '/start') {
-            const isJoined = await checkChannelJoin(bot, userId);
-            if (!isJoined) {
-                const keyboard = {
-                    inline_keyboard: [
-                        [{ text: '📢 Join Channel 1', url: 'https://t.me/SheinVoucherHub' }],
-                        [{ text: '📢 Join Channel 2', url: 'https://t.me/OrdersNotify' }],
-                        [{ text: '✅ Verify', callback_data: 'verify_join' }]
-                    ]
-                };
-                
-                await bot.sendMessage(chatId, MESSAGES.JOIN_REQUIRED, {
-                    reply_markup: keyboard,
-                    parse_mode: 'HTML'
-                });
-                return;
+        // Handle /start command separately (no channel check needed)
+        if (text === '/start') {
+            await startCommand.execute(msg);
+            return;
+        }
+        
+        // Check channel join for all other commands
+        const isJoined = await checkChannelJoin(bot, userId);
+        if (!isJoined) {
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: '📢 Join Channel 1', url: 'https://t.me/SheinVoucherHub' }],
+                    [{ text: '📢 Join Channel 2', url: 'https://t.me/OrdersNotify' }],
+                    [{ text: '✅ Verify', callback_data: 'verify_join' }]
+                ]
+            };
+            
+            await bot.sendMessage(chatId, MESSAGES.JOIN_REQUIRED, {
+                reply_markup: keyboard,
+                parse_mode: 'HTML'
+            });
+            return;
+        }
+        
+        const pool = getPool();
+        
+        // Update last active
+        await pool.query(
+            'UPDATE users SET last_active = NOW() WHERE user_id = $1',
+            [userId]
+        );
+        
+        // Check if user has an active session
+        const session = await pool.query(
+            'SELECT temp_data FROM user_sessions WHERE user_id = $1',
+            [userId]
+        );
+        
+        // Handle admin commands
+        if (userId.toString() === process.env.ADMIN_ID && text === '/admin') {
+            await adminCommands.showAdminPanel(msg);
+            return;
+        }
+        
+        // Handle menu button clicks
+        if (text) {
+            switch(text) {
+                case '🛒 Buy Voucher':
+                    await userCommands.buyVoucher.showCategories(msg);
+                    return;
+                    
+                case '🔁 Recover Vouchers':
+                    await userCommands.recoverVoucher.prompt(msg);
+                    return;
+                    
+                case '📦 My Orders':
+                    await userCommands.myOrders.showOrders(msg);
+                    return;
+                    
+                case '📜 Disclaimer':
+                    await userCommands.disclaimer.show(msg);
+                    return;
+                    
+                case '🆘 Support':
+                    await userCommands.support.start(msg);
+                    return;
+                    
+                case '↩️ Back':
+                case '↩️ Leave':
+                    await startCommand.showMainMenu(msg);
+                    return;
             }
         }
         
-        // Handle commands
+        // Handle commands starting with /
         if (text && text.startsWith('/')) {
             const command = text.split(' ')[0].toLowerCase();
             
-            // Admin commands
-            if (userId.toString() === process.env.ADMIN_ID) {
-                if (command === '/admin') {
-                    await adminCommands.showAdminPanel(msg);
-                    return;
-                }
-            }
-            
-            // User commands
             switch(command) {
-                case '/start':
-                    await startCommand.execute(msg);
-                    break;
                 case '/buy':
                     await userCommands.buyVoucher.showCategories(msg);
                     break;
@@ -90,79 +134,66 @@ const handleMessage = async (msg) => {
                     await userCommands.disclaimer.show(msg);
                     break;
                 default:
-                    await bot.sendMessage(chatId, '❌ Unknown command. Use /start');
+                    await bot.sendMessage(chatId, '❌ Unknown command. Please use the menu buttons below:', {
+                        reply_markup: { keyboard: KEYBOARD.MAIN, resize_keyboard: true }
+                    });
             }
             return;
         }
         
-        // Handle text messages (non-commands)
-        if (text) {
-            // Update last active
-            const pool = getPool();
-            await pool.query(
-                'UPDATE users SET last_active = NOW() WHERE user_id = $1',
-                [userId]
-            );
+        // Handle based on session state
+        if (session.rows.length > 0 && session.rows[0].temp_data) {
+            const state = session.rows[0].temp_data;
+            logger.info(`User ${userId} in state: ${state.action}`);
             
-            // Handle based on current state
-            const session = await pool.query(
-                'SELECT temp_data FROM user_sessions WHERE user_id = $1',
-                [userId]
-            );
-            
-            if (session.rows.length > 0 && session.rows[0].temp_data) {
-                const state = session.rows[0].temp_data;
-                
-                switch(state.action) {
-                    case 'awaiting_utr':
-                        await userCommands.buyVoucher.processUTR(msg, state);
-                        break;
-                    case 'awaiting_recovery':
-                        await userCommands.recoverVoucher.process(msg);
-                        break;
-                    case 'awaiting_support':
-                        await userCommands.support.process(msg);
-                        break;
-                    case 'awaiting_custom_quantity':
-                        await userCommands.buyVoucher.processCustomQuantity(msg, state);
-                        break;
-                    default:
-                        await bot.sendMessage(chatId, 'Please use the menu buttons below:', {
-                            reply_markup: { keyboard: KEYBOARD.MAIN, resize_keyboard: true }
-                        });
-                }
-            } else {
-                // Handle menu buttons
-                switch(text) {
-                    case '🛒 Buy Voucher':
-                        await userCommands.buyVoucher.showCategories(msg);
-                        break;
-                    case '🔁 Recover Vouchers':
-                        await userCommands.recoverVoucher.prompt(msg);
-                        break;
-                    case '📦 My Orders':
-                        await userCommands.myOrders.showOrders(msg);
-                        break;
-                    case '📜 Disclaimer':
-                        await userCommands.disclaimer.show(msg);
-                        break;
-                    case '🆘 Support':
-                        await userCommands.support.start(msg);
-                        break;
-                    case '↩️ Back':
-                    case '↩️ Leave':
-                        await startCommand.showMainMenu(msg);
-                        break;
-                    default:
-                        await bot.sendMessage(chatId, 'Please use the menu buttons below:', {
-                            reply_markup: { keyboard: KEYBOARD.MAIN, resize_keyboard: true }
-                        });
-                }
+            switch(state.action) {
+                case 'awaiting_custom_quantity':
+                    await userCommands.buyVoucher.processCustomQuantity(msg, state);
+                    break;
+                    
+                case 'awaiting_payment':
+                    // This should be handled by photo handler, not text
+                    await bot.sendMessage(chatId, 'Please send a screenshot of your payment.', {
+                        reply_markup: { keyboard: [['↩️ Cancel']], resize_keyboard: true }
+                    });
+                    break;
+                    
+                case 'awaiting_utr':
+                    await userCommands.buyVoucher.processUTR(msg, state);
+                    break;
+                    
+                case 'awaiting_recovery':
+                    await userCommands.recoverVoucher.process(msg);
+                    break;
+                    
+                case 'awaiting_support':
+                    await userCommands.support.process(msg);
+                    break;
+                    
+                default:
+                    // Clear invalid session
+                    await pool.query(
+                        'UPDATE user_sessions SET temp_data = NULL WHERE user_id = $1',
+                        [userId]
+                    );
+                    await bot.sendMessage(chatId, 'Please use the menu buttons below:', {
+                        reply_markup: { keyboard: KEYBOARD.MAIN, resize_keyboard: true }
+                    });
+            }
+        } else {
+            // No active session and not a menu button
+            if (text && !text.startsWith('/')) {
+                await bot.sendMessage(chatId, 'Please use the menu buttons below:', {
+                    reply_markup: { keyboard: KEYBOARD.MAIN, resize_keyboard: true }
+                });
             }
         }
+        
     } catch (error) {
         logger.error('Error in message handler:', error);
-        await bot.sendMessage(chatId, '❌ An error occurred. Please try again later.');
+        await bot.sendMessage(chatId, '❌ An error occurred. Please try again later.', {
+            reply_markup: { keyboard: KEYBOARD.MAIN, resize_keyboard: true }
+        });
     }
 };
 
